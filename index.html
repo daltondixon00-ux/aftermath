@@ -284,8 +284,9 @@
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="importmap">
 { "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+  "@dgreenheck/ez-tree": "https://cdn.jsdelivr.net/npm/@dgreenheck/ez-tree@1.1.0/build/ez-tree.es.js"
 } }
 </script>
 <script type="module">
@@ -299,6 +300,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -342,7 +344,12 @@ const sfx = {
     for (let i = 0; i < len; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; bd[i] = last * 3.5; }
     const room = ctx.createBufferSource(); room.buffer = bbuf; room.loop = true;
     const rf = ctx.createBiquadFilter(); rf.type = 'lowpass'; rf.frequency.value = 420;
-    const rg = ctx.createGain(); rg.gain.value = 0.22; room.connect(rf).connect(rg).connect(this.master); room.start();
+    const rg = ctx.createGain(); rg.gain.value = 0.22; room.connect(rf).connect(rg).connect(this.master); room.start(); this.roomGain = rg;
+    // Wind (only heard outside)
+    const wind = ctx.createBufferSource(); wind.buffer = bbuf; wind.loop = true; wind.playbackRate.value = 1.6;
+    const wf = ctx.createBiquadFilter(); wf.type = 'bandpass'; wf.frequency.value = 420; wf.Q.value = 0.6;
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 0.13; const lg = ctx.createGain(); lg.gain.value = 220; lfo.connect(lg).connect(wf.frequency); lfo.start();
+    this.windGain = ctx.createGain(); this.windGain.gain.value = 0; wind.connect(wf).connect(this.windGain).connect(this.master); wind.start();
     // Fluorescent hum
     this.humGain = ctx.createGain(); this.humGain.gain.value = 0.012; this.humGain.connect(this.master);
     for (const f of [120, 240, 360]) { const o = ctx.createOscillator(); o.frequency.value = f; const g = ctx.createGain(); g.gain.value = 1 / (f / 120); o.connect(g).connect(this.humGain); o.start(); }
@@ -382,6 +389,9 @@ const sfx = {
       case 'chime': { this.tone(523, .9, .07); setTimeout(() => this.ctx && this.tone(784, 1.1, .06), 140); break; }
       case 'door': { const n = this.src(1.8, 'bandpass', 300, 8); n.f.frequency.linearRampToValueAtTime(900, n.t + 1.5); this.env(n.g, n.t, .3, .35, 1.4);
         this.tone(55, 1.6, .08, 'sawtooth', 75); break; }
+      case 'stepOut': { const n = this.src(.14, 'lowpass', rand(260, 360), 1); this.env(n.g, n.t, .005, .3, .12); const c = this.src(.08, 'highpass', 3000, 1); this.env(c.g, c.t, .002, .05, .06); break; }
+      case 'clank': { this.tone(320, .4, .25, 'triangle', 300); this.tone(870, .3, .12, 'sine', 840); const n = this.src(.25, 'highpass', 2000, 2); this.env(n.g, n.t, .002, .4, .2); break; }
+      case 'crow': { const caw = (dl) => setTimeout(() => { if (!this.ctx) return; const o = this.ctx.createOscillator(), f = this.ctx.createBiquadFilter(), g = this.ctx.createGain(); o.type = 'sawtooth'; o.frequency.setValueAtTime(560, this.ctx.currentTime); o.frequency.exponentialRampToValueAtTime(380, this.ctx.currentTime + .28); f.type = 'bandpass'; f.frequency.value = 1300; f.Q.value = 3; o.connect(f).connect(g).connect(this.master); this.env(g, this.ctx.currentTime, .02, .06, .28); o.start(); o.stop(this.ctx.currentTime + .4); }, dl); caw(0); caw(380); if (Math.random() < .5) caw(760); break; }
       case 'rattle': { for (let k = 0; k < 4; k++) setTimeout(() => { if (!this.ctx) return; const n = this.src(.08, 'bandpass', rand(1800, 2600), 4); this.env(n.g, n.t, .002, .35, .06); this.tone(rand(85, 110), .08, .25, 'sine', 60); }, k * rand(70, 110)); break; }
       case 'bang': { this.tone(70, .5, 1, 'sine', 32); const n = this.src(.4, 'lowpass', 320, 1); this.env(n.g, n.t, .002, 1, .35);
         setTimeout(() => { if (!this.ctx) return; this.tone(60, .45, .9, 'sine', 30); const m = this.src(.35, 'lowpass', 280, 1); this.env(m.g, m.t, .002, .9, .3); }, 260); break; }
@@ -404,7 +414,7 @@ RectAreaLightUniformsLib.init();
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x030404);
 scene.fog = new THREE.FogExp2(0x0b0f0d, 0.02);
-const camera = new THREE.PerspectiveCamera(settings.fov, innerWidth / innerHeight, 0.03, 60);
+const camera = new THREE.PerspectiveCamera(settings.fov, innerWidth / innerHeight, 0.04, 70);
 scene.add(camera);
 
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
@@ -635,6 +645,8 @@ function buildRoom() {
   buildDoor();
   buildEmergencyBox();
   buildHallway();
+  buildExitDoor();
+  buildOutdoors();
 }
 
 function buildBeds() {
@@ -770,7 +782,6 @@ function buildHallway() {
     band(l1, s * HW, (-HZ + SIDE_Z0) / 2, -s * Math.PI / 2);
     band(l2, s * HW, (SIDE_Z1 + HEND) / 2, -s * Math.PI / 2);
   }
-  band(HW * 2, 0, HEND, 0);
   // Waiting room (left) and reception (right)
   const ww = -HW - WAIT_X, dw = DESK_X - HW, rl = SIDE_Z0 - SIDE_Z1, rcz = (SIDE_Z0 + SIDE_Z1) / 2;
   band(rl, WAIT_X, rcz, Math.PI / 2); band(ww, (WAIT_X - HW) / 2, SIDE_Z0, Math.PI); band(ww, (WAIT_X - HW) / 2, SIDE_Z1, 0);
@@ -852,10 +863,7 @@ function buildHallway() {
   const dm = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 4), new THREE.MeshStandardMaterial({ map: drag, transparent: true, depthWrite: false, roughness: 0.4 }));
   dm.rotation.set(-Math.PI / 2, 0, 0.1); dm.position.set(-0.6, 0.005, -20.5); scene.add(dm);
 
-  // Chained double door at the far end, with an EXIT sign (next chapter)
-  for (const dx of [-0.6, 0.6]) { const d = new THREE.Mesh(new THREE.BoxGeometry(1.15, 2.2, 0.06), MAT.metal); d.position.set(dx, 1.1, HEND + 0.04); d.castShadow = true; scene.add(d); }
-  for (const r of [0.5, -0.5]) { const ch = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.012, 6, 40, Math.PI), MAT.darkMetal); ch.position.set(0, 1.05, HEND + 0.1); ch.rotation.set(0, 0, r + Math.PI); scene.add(ch); }
-  const lock = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.13, 0.05), MAT.buckle); lock.position.set(0, 0.35, HEND + 0.12); scene.add(lock);
+  // EXIT sign over the double door at the far end
   const exitTex = canvasTex(256, 96, (g, W, Hh) => { g.fillStyle = '#1a0503'; g.fillRect(0, 0, W, Hh); g.fillStyle = '#ff4a30'; g.font = 'bold 70px "Barlow Condensed", sans-serif'; g.textAlign = 'center'; g.fillText('EXIT', W / 2, 72); });
   const exitMat = new THREE.MeshStandardMaterial({ map: exitTex, emissive: 0xffffff, emissiveMap: exitTex, emissiveIntensity: 1.6 });
   const exit = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.19), exitMat); exit.position.set(0, 2.45, HEND + 0.04); scene.add(exit);
@@ -865,8 +873,16 @@ function buildHallway() {
 
 // Furniture for the waiting room and reception. Loads after the Home Menu shows.
 async function loadHallwayProps() {
-  const names = ['SchoolChair_01', 'coffee_table_round_01', 'Television_01', 'anthurium_botany_01', 'metal_office_desk', 'desk_lamp_arm_01', 'clipboard', 'steel_frame_shelves_01', 'cardboard_box_01', 'modern_arm_chair_01'];
-  const [chair, table, tv, plant, desk, lamp, clip, shelves, box, office] = await Promise.all(names.map(loadModel));
+  const names = ['SchoolChair_01', 'coffee_table_round_01', 'Television_01', 'anthurium_botany_01', 'metal_office_desk', 'desk_lamp_arm_01', 'clipboard', 'steel_frame_shelves_01', 'cardboard_box_01', 'modern_arm_chair_01', 'bolt_cutters_01'];
+  const [chair, table, tv, plant, desk, lamp, clip, shelves, box, office, cutters] = await Promise.all(names.map(loadModel));
+  if (cutters) {
+    cutters.updateMatrixWorld(true); const s = new THREE.Vector3(); new THREE.Box3().setFromObject(cutters).getSize(s);
+    if (s.y >= s.x && s.y >= s.z) cutters.rotation.x = Math.PI / 2;            // lay it flat
+    models.cutters = fit(cutters, 0.7);
+    cuttersInWorld = models.cutters.clone(); cuttersInWorld.position.set(3.75, 0.005, -30.3); cuttersInWorld.rotation.y = 0.7; cuttersInWorld.visible = !world.cuttersOwner; scene.add(cuttersInWorld);
+    const v = models.cutters.clone(); v.traverse((o) => { if (o.isMesh) o.castShadow = false; }); v.rotation.set(-1.25, 0.25, 0.15); v.position.set(0, -0.05, 0); viewCutters.add(v);
+    ITEMS[1].icon = makeIcon(models.cutters, 0.75); refreshHotbar(false);
+  }
   const put = (m, x, y, z, ry = 0, extra) => { if (!m) return null; const c = m.clone(); c.position.set(x, y, z); c.rotation.y = ry; if (extra) extra(c); scene.add(c); return c; };
   const topOf = (m) => new THREE.Box3().setFromObject(m).max.y;
   if (chair) {
@@ -910,9 +926,317 @@ function updateJammed(dt) {
 }
 
 // =====================================================================
+// The exit door, bolt cutters, and the outdoors (hospital, road, forest)
+// =====================================================================
+const BLD = { x0: -6.8, x1: 6.8, z0: HEND - 0.12, z1: HZ + 0.15, h: 3.7 };   // hospital outer walls
+const ROAD_Z = -58, ROAD_W = 7;
+const OUT = { x0: -50, x1: 95, z0: -100, z1: 30 };                              // where players can walk outside
+const exitDoor = { left: null, right: null, chain: null, t: 0, opening: false, fall: 0 };
+let cuttersInWorld = null;
+const outside = { f: 0, dir: null, hemi: null, doorLight: null, chunks: [], trees: [], treeCols: new Map(), ready: false, warnT: 0, crowT: 20 };
+// Open exit doors: thin blockers where the door leaves end up
+const EXIT_LEAVES = [{ minX: -1.24, maxX: -1.06, minZ: HEND - 1.25, maxZ: HEND - 0.02 }, { minX: 1.06, maxX: 1.24, minZ: HEND - 1.25, maxZ: HEND - 0.02 }];
+ZONES.push({ x0: -1.15, x1: 1.15, z0: HEND - 0.9, z1: HEND + 0.8, exit: true });
+ZONES.push({ x0: OUT.x0, x1: OUT.x1, z0: OUT.z0, z1: OUT.z1, exit: true, outdoor: true });
+
+// Seeded random so every player gets the same forest
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function vnoise(x, z) {
+  const xi = Math.floor(x), zi = Math.floor(z), xf = x - xi, zf = z - zi;
+  const h = (a, b) => { let n = Math.imul(a, 374761393) + Math.imul(b, 668265263) | 0; n = Math.imul(n ^ (n >>> 13), 1274126177); return ((n ^ (n >>> 16)) >>> 0) / 4294967295 * 2 - 1; };
+  const u = xf * xf * (3 - 2 * xf), v = zf * zf * (3 - 2 * zf);
+  return lerp(lerp(h(xi, zi), h(xi + 1, zi), u), lerp(h(xi, zi + 1), h(xi + 1, zi + 1), u), v);
+}
+const insideBuilding = (x, z) => x > BLD.x0 && x < BLD.x1 && z > BLD.z0 && z < BLD.z1;
+// Ground height: flat around the hospital, path and road; rolling hills further out
+function terrainH(x, z) {
+  if (insideBuilding(x, z)) return 0;
+  const dx = Math.max(BLD.x0 - 10 - x, 0, x - BLD.x1 - 10), dz = Math.max(BLD.z0 - 10 - z, 0, z - BLD.z1 - 10);
+  const dB = Math.hypot(dx, dz), dRoad = Math.max(0, Math.abs(z - ROAD_Z) - 8);
+  const dPath = z < BLD.z0 && z > ROAD_Z ? Math.max(0, Math.abs(x) - 5) : 1e9;
+  const d = Math.min(dB, dRoad, dPath), k = d >= 35 ? 1 : (d / 35) * (d / 35) * (3 - 2 * d / 35);
+  return k * (vnoise(x * 0.018, z * 0.018) * 6 + vnoise(x * 0.07 + 11, z * 0.07) * 1.4);
+}
+
+function buildExitDoor() {
+  // Hallway end wall with the double doorway (replaces the solid end wall)
+  for (const s of [-1, 1]) {
+    const w = HW - 1.15;
+    for (const [h, y, mat] of [[1.0, 0.5, MAT.wallLow], [HH - 1.0, 1.0 + (HH - 1.0) / 2, MAT.wall]]) {
+      const m = new THREE.Mesh(meterUV(new THREE.PlaneGeometry(w, h), w, h), mat); m.position.set(s * (1.15 + w / 2), y, HEND); m.receiveShadow = true; scene.add(m);
+    }
+    const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.3, 0.2), MAT.darkMetal); jamb.position.set(s * 1.2, 1.15, HEND - 0.06); scene.add(jamb);
+  }
+  const top = new THREE.Mesh(meterUV(new THREE.PlaneGeometry(2.3, HH - 2.25), 2.3, HH - 2.25), MAT.wall); top.position.set(0, (2.25 + HH) / 2, HEND); scene.add(top);
+  const header = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.1, 0.2), MAT.darkMetal); header.position.set(0, 2.3, HEND - 0.06); scene.add(header);
+  // Two door leaves on hinges; they swing outward
+  const leafMat = MAT.metal.clone(); leafMat.color.set(0x4f5b55);
+  const mk = (side) => {
+    const pivot = new THREE.Group(); pivot.position.set(side * 1.15, 0, HEND - 0.06); scene.add(pivot);
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(1.13, 2.2, 0.05), leafMat); leaf.position.set(-side * 0.565, 1.1, 0); leaf.castShadow = leaf.receiveShadow = true; pivot.add(leaf);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.06, 0.06), MAT.buckle); bar.position.set(-side * 0.6, 1.0, 0.07); pivot.add(bar);
+    return pivot;
+  };
+  exitDoor.left = mk(-1); exitDoor.right = mk(1);
+  // Chain and padlock across the push bars
+  const chain = new THREE.Group(); scene.add(chain);
+  const linkGeo = new THREE.TorusGeometry(0.03, 0.008, 6, 10);
+  for (let i = 0; i < 26; i++) {
+    const t = i / 25, l = new THREE.Mesh(linkGeo, MAT.darkMetal);
+    l.position.set(lerp(-0.62, 0.62, t), 1.0 + Math.sin(t * Math.PI) * -0.12 + (i % 2) * 0.004, HEND + 0.06); l.rotation.set(0, i % 2 ? Math.PI / 2 : 0, 0); chain.add(l);
+  }
+  const lock = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.11, 0.04), MAT.buckle); lock.position.set(0, 0.84, HEND + 0.08); chain.add(lock);
+  const shackle = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.008, 6, 12, Math.PI), MAT.buckle); shackle.position.set(0, 0.9, HEND + 0.08); chain.add(shackle);
+  exitDoor.chain = chain;
+  const hit = new THREE.Mesh(new THREE.BoxGeometry(2.3, 2.3, 0.4), new THREE.MeshBasicMaterial()); hit.visible = false; hit.position.set(0, 1.15, HEND + 0.1); scene.add(hit);
+  interactables.push({ mesh: hit, id: 'exit' });
+  // Bolt cutters pickup spot behind the reception counter (model added when it loads)
+  const ch = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.3, 0.45), new THREE.MeshBasicMaterial()); ch.visible = false; ch.position.set(3.75, 0.12, -30.3); scene.add(ch);
+  interactables.push({ mesh: ch, id: 'cutters' });
+}
+function openExitDoor() { if (exitDoor.t >= 1) return; exitDoor.opening = true; sfx.play('door'); }
+function updateExitDoor(dt) {
+  if (exitDoor.fall > 0 && exitDoor.fall < 1) {   // chain dropping to the floor
+    exitDoor.fall = Math.min(1, exitDoor.fall + dt * 2.2); const k = exitDoor.fall * exitDoor.fall;
+    exitDoor.chain.position.y = -0.85 * k; exitDoor.chain.rotation.z = 0.3 * k;
+  }
+  if (!exitDoor.opening) return;
+  exitDoor.t = Math.min(1, exitDoor.t + dt / 1.6); const e = ease(exitDoor.t);
+  exitDoor.left.rotation.y = e * 1.45; exitDoor.right.rotation.y = -e * 1.45;
+  if (exitDoor.t >= 1) exitDoor.opening = false;
+}
+
+function buildOutdoors() {
+  // --- Sky light, sun, outdoor fill (made now so nothing recompiles later) ---
+  outside.dir = new THREE.DirectionalLight(0xffc9a0, 0); outside.dir.castShadow = true;
+  outside.dir.shadow.camera.left = -45; outside.dir.shadow.camera.right = 45; outside.dir.shadow.camera.top = 45; outside.dir.shadow.camera.bottom = -45;
+  outside.dir.shadow.camera.near = 1; outside.dir.shadow.camera.far = 220; outside.dir.shadow.bias = -0.0006; outside.dir.shadow.normalBias = 0.04;
+  outside.dir.shadow.mapSize.set(2048, 2048);
+  scene.add(outside.dir, outside.dir.target);
+  outside.hemi = new THREE.HemisphereLight(0xa3b0c4, 0x3b3328, 0); scene.add(outside.hemi);
+
+  // --- Hospital exterior ---
+  const W = pbr('concrete_wall_006', 3, { color: 0xe2e2dc });
+  const roofMat = pbr('dirty_concrete', 4);
+  const H = BLD.h, wx = BLD.x1 - BLD.x0, wz = BLD.z1 - BLD.z0, cz = (BLD.z0 + BLD.z1) / 2;
+  const wall = (w, h, x, y, z, ry) => { const m = new THREE.Mesh(meterUV(new THREE.PlaneGeometry(w, h), w, h), W); m.position.set(x, y, z); m.rotation.y = ry; m.castShadow = m.receiveShadow = true; scene.add(m); return m; };
+  wall(wz, H, BLD.x0, H / 2, cz, -Math.PI / 2); wall(wz, H, BLD.x1, H / 2, cz, Math.PI / 2);
+  // Exit side (faces the road) with the doorway
+  const sw = (wx - 2.3) / 2;
+  wall(sw, H, BLD.x0 + sw / 2, H / 2, BLD.z0, Math.PI); wall(sw, H, BLD.x1 - sw / 2, H / 2, BLD.z0, Math.PI);
+  wall(2.3, H - 2.3, 0, 2.3 + (H - 2.3) / 2, BLD.z0, Math.PI);
+  // Back side with the patient room window
+  const bw = (wx - 1.6) / 2;
+  wall(bw, H, BLD.x0 + bw / 2, H / 2, BLD.z1, 0); wall(bw, H, BLD.x1 - bw / 2, H / 2, BLD.z1, 0);
+  wall(1.6, 1.5, 0, 0.75, BLD.z1, 0); wall(1.6, H - 2.5, 0, 2.5 + (H - 2.5) / 2, BLD.z1, 0);
+  const roof = new THREE.Mesh(meterUV(new THREE.PlaneGeometry(wx + 0.4, wz + 0.4), wx, wz), roofMat); roof.rotation.x = -Math.PI / 2; roof.position.set(0, H, cz); roof.castShadow = roof.receiveShadow = true; scene.add(roof);
+  const under = new THREE.Mesh(new THREE.PlaneGeometry(wx + 0.4, wz + 0.4), new THREE.MeshBasicMaterial({ color: 0x000000 })); under.rotation.x = Math.PI / 2; under.position.set(0, H - 0.01, cz); under.castShadow = true; scene.add(under);
+  for (const [w, x, z, ry] of [[wx + 0.5, 0, BLD.z0 - 0.05, 0], [wx + 0.5, 0, BLD.z1 + 0.05, 0], [wz + 0.5, BLD.x0 - 0.05, cz, Math.PI / 2], [wz + 0.5, BLD.x1 + 0.05, cz, Math.PI / 2]]) {
+    const p = new THREE.Mesh(boxMeterUV(new THREE.BoxGeometry(w, 0.45, 0.25)), W); p.position.set(x, H + 0.2, z); p.rotation.y = ry; p.castShadow = true; scene.add(p);
+  }
+  // Windows along the long sides (dark glass, some boarded)
+  const glass = new THREE.MeshStandardMaterial({ color: 0x0b0f12, roughness: 0.15, metalness: 0.6 });
+  const frame = new THREE.MeshStandardMaterial({ color: 0x3a3f3b, roughness: 0.6 });
+  let wi = 0;
+  for (const s of [-1, 1]) for (const z of [-30, -22, -14, -6, 2]) {
+    const x = s > 0 ? BLD.x1 + 0.02 : BLD.x0 - 0.02, ry = s > 0 ? Math.PI / 2 : -Math.PI / 2;
+    const f = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 1.3), frame); f.position.set(x, 1.95, z); f.rotation.y = ry; scene.add(f);
+    const g = new THREE.Mesh(new THREE.PlaneGeometry(1.36, 1.16), glass); g.position.set(x + s * 0.005, 1.95, z); g.rotation.y = ry; scene.add(g);
+    if (wi++ % 3 === 1) for (const [y, r] of [[1.7, 0.15], [2.15, -0.1]]) { const b = new THREE.Mesh(boxMeterUV(new THREE.BoxGeometry(1.8, 0.17, 0.035)), MAT.planks); b.position.set(x + s * 0.03, y, z); b.rotation.set(0, ry, r); b.castShadow = true; scene.add(b); }
+  }
+  // Awning, door light and hospital name over the exit
+  const awn = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.12, 1.3), MAT.darkMetal); awn.position.set(0, 2.75, BLD.z0 - 0.65); awn.castShadow = true; scene.add(awn);
+  const lampBox = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.18), new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffc27a, emissiveIntensity: 1.5 })); lampBox.position.set(0, 2.62, BLD.z0 - 0.4); scene.add(lampBox);
+  outside.doorLight = new THREE.PointLight(0xffb870, 5, 9, 1.6); outside.doorLight.position.set(0, 2.45, BLD.z0 - 0.8); scene.add(outside.doorLight); outside.doorLamp = lampBox.material;
+  const name = canvasTex(1024, 256, (g, w, h) => { g.clearRect(0, 0, w, h); g.fillStyle = 'rgba(232,228,216,0.92)'; g.font = 'bold 120px "Barlow Condensed", sans-serif'; g.textAlign = 'center'; g.fillText("ST. BRIGID'S", w / 2, 120); g.font = '600 76px "Barlow Condensed", sans-serif'; g.fillText('COUNTY HOSPITAL', w / 2, 215); });
+  const nm = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 0.9), new THREE.MeshStandardMaterial({ map: name, transparent: true, roughness: 0.6, depthWrite: false })); nm.position.set(3.9, 2.9, BLD.z0 - 0.02); nm.rotation.y = Math.PI; scene.add(nm);
+
+  // --- Ground with rolling hills ---
+  const GW = 520, GD = 440, gcx = 20, gcz = -60;
+  const gg = new THREE.PlaneGeometry(GW, GD, 130, 110); gg.rotateX(-Math.PI / 2);
+  const pos = gg.attributes.position, uv = gg.attributes.uv, col = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i) + gcx, z = pos.getZ(i) + gcz;
+    pos.setXYZ(i, x, insideBuilding(x, z) ? -0.08 : terrainH(x, z), z); uv.setXY(i, x / 3, -z / 3);
+    const v = 0.78 + 0.22 * (vnoise(x * 0.05 + 3, z * 0.05) * 0.5 + 0.5) - (vnoise(x * 0.2, z * 0.2) > 0.55 ? 0.08 : 0);
+    col[i * 3] = v; col[i * 3 + 1] = v * 1.02; col[i * 3 + 2] = v * 0.95;
+  }
+  gg.setAttribute('color', new THREE.BufferAttribute(col, 3)); gg.computeVertexNormals();
+  const grassMat = pbr('leafy_grass', 3, { color: 0x939b80 }); grassMat.vertexColors = true;
+  const ground = new THREE.Mesh(gg, grassMat); ground.receiveShadow = true; scene.add(ground);
+
+  // --- Road, path, concrete pad ---
+  const strip = (w, l, x, z, mat, y, rotY = 0) => { const m = new THREE.Mesh(meterUV(new THREE.PlaneGeometry(w, l), w, l), mat); m.rotation.set(-Math.PI / 2, 0, rotY); m.position.set(x, y, z); m.receiveShadow = true; scene.add(m); return m; };
+  const roadMat = pbr('road_damaged', 7, { color: 0x6e6e6e, extra: { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 } });
+  strip(ROAD_W, 900, 0, ROAD_Z, roadMat, 0.03, Math.PI / 2);
+  const lineMat = new THREE.MeshStandardMaterial({ color: 0xb59a3a, roughness: 0.8, transparent: true, opacity: 0.55, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+  const dash = new THREE.InstancedMesh(new THREE.PlaneGeometry(3, 0.14), lineMat, 100); const dm = new THREE.Matrix4(), dq = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+  for (let i = 0; i < 100; i++) { dm.compose(new THREE.Vector3(-450 + i * 9 + rand(-0.3, 0.3), 0.04, ROAD_Z), dq, new THREE.Vector3(1, 1, 1)); dash.setMatrixAt(i, dm); }
+  scene.add(dash);
+  const pathMat = pbr('gravel_concrete', 2.5, { color: 0x7d7d78, extra: { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 } });
+  const pathLen = (BLD.z0 - 3) - (ROAD_Z + ROAD_W / 2);
+  strip(2.4, pathLen, 0, (BLD.z0 - 3 + ROAD_Z + ROAD_W / 2) / 2, pathMat, 0.02);
+  strip(5, 3, 0, BLD.z0 - 1.5, pbr('dirty_concrete', 2.5, { extra: { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 } }), 0.025);
+
+  // --- Road signs ---
+  const signTex = (lines, bg, fg, w, h) => canvasTex(512, Math.round(512 * h / w), (g, W2, H2) => { g.fillStyle = bg; g.fillRect(0, 0, W2, H2); g.strokeStyle = fg; g.lineWidth = 8; g.strokeRect(10, 10, W2 - 20, H2 - 20); g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle'; lines.forEach((t, k) => { let fs = Math.round(H2 / (lines.length + 0.9)); g.font = '600 ' + fs + 'px "Barlow Condensed", sans-serif'; while (g.measureText(t).width > W2 - 60 && fs > 10) { fs -= 2; g.font = '600 ' + fs + 'px "Barlow Condensed", sans-serif'; } g.fillText(t, W2 / 2, H2 * (k + 1) / (lines.length + 1)); }); });
+  const post = (x, z, h) => { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, h, 8), MAT.metal); p.position.set(x, h / 2, z); p.castShadow = true; scene.add(p); };
+  const board = (tex, w, h, x, y, z, ry) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.03), [MAT.metal, MAT.metal, MAT.metal, MAT.metal, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 }), MAT.metal]); b.position.set(x, y, z); b.rotation.y = ry; b.castShadow = true; scene.add(b); };
+  post(9, ROAD_Z + 5, 2.6); board(signTex(['MILLBROOK  3 km  →'], '#1f5a3a', '#e8e4d8', 1.8, 0.45), 1.8, 0.45, 9, 2.45, ROAD_Z + 5, Math.PI);
+  post(-2.2, ROAD_Z + 4.6, 2.3); board(signTex(['H', 'HOSPITAL'], '#1f3f7a', '#e8e4d8', 0.7, 0.8), 0.7, 0.8, -2.2, 2.0, ROAD_Z + 4.6, Math.PI);
+  addCol(8.9, 9.1, ROAD_Z + 4.9, ROAD_Z + 5.1); addCol(-2.3, -2.1, ROAD_Z + 4.5, ROAD_Z + 4.7);
+}
+
+// Roadside models and the forest. Loads in the background after the Home Menu shows.
+async function loadOutdoorProps() {
+  const [car, lamp, barrier] = await Promise.all(['covered_car', 'street_lamp_02', 'concrete_road_barrier_02'].map(loadModel));
+  const place = (m, size, x, z, ry, opts) => { if (!m) return null; const c = fit(m, size, opts); c.position.set(x, terrainH(x, z), z); c.rotation.y = ry; scene.add(c); return c; };
+  if (car) { place(car, 4.6, 18, ROAD_Z + 2.0, 0.08, { longX: true }); addCol(15.6, 20.4, ROAD_Z + 0.9, ROAD_Z + 3.1); }
+  if (barrier) { const b = place(barrier, 2.0, -14, ROAD_Z - 1.2, 0.5, { longX: true }); addCol(-15, -13, ROAD_Z - 1.8, ROAD_Z - 0.6); if (b) b.rotation.z = 0.04; }
+  if (lamp) { const l = fit(lamp, 6.5); for (const x of [-26, 30, 70]) { const c = l.clone(); c.position.set(x, 0, ROAD_Z + 4.6); c.rotation.y = Math.PI; scene.add(c); addCol(x - 0.15, x + 0.15, ROAD_Z + 4.45, ROAD_Z + 4.75); } }
+  await buildForest();
+  renderer.compile(scene, camera);
+}
+
+async function buildForest() {
+  const { Tree } = await import('@dgreenheck/ez-tree');
+  const lite = (preset, seed) => {
+    const t = new Tree(); t.loadPreset(preset); const o = t.options; o.seed = seed;
+    for (const k in o.branch.sections) o.branch.sections[k] = Math.max(3, Math.round(o.branch.sections[k] * 0.5));
+    for (const k in o.branch.segments) o.branch.segments[k] = Math.max(3, Math.round(o.branch.segments[k] * 0.6));
+    o.leaves.count = Math.max(4, Math.round(o.leaves.count * 0.7));
+    t.generate(); return t;
+  };
+  const variants = [['Pine Medium', 11, 0.27], ['Pine Medium', 23, 0.23], ['Oak Medium', 5, 0.24], ['Ash Medium', 9, 0.2], ['Aspen Medium', 3, 0.26]].map(([p, s, k]) => ({ tree: lite(p, s), scale: k }));
+  outside.trees = variants.map((v) => v.tree);
+  // Wait for the leaf and bark pictures so the far-away stand-ins look right
+  const maps = variants.flatMap((v) => [v.tree.leavesMesh.material.map, v.tree.branchesMesh.material.map]).filter(Boolean);
+  for (let i = 0; i < 50 && !maps.every((m) => m.image && (m.image.complete || m.image.width)); i++) await new Promise((r) => setTimeout(r, 100));
+  // Flat stand-in ("impostor") for each tree type, used far away
+  for (const v of variants) {
+    const box = new THREE.Box3().setFromObject(v.tree), size = new THREE.Vector3(), c = new THREE.Vector3(); box.getSize(size); box.getCenter(c);
+    const rt = new THREE.WebGLRenderTarget(256, 512, { colorSpace: THREE.SRGBColorSpace });
+    const s = new THREE.Scene(); s.add(new THREE.HemisphereLight(0xa3b0c4, 0x3b3328, 1.6)); const d = new THREE.DirectionalLight(0xffc9a0, 1.6); d.position.set(-1, 2, 2); s.add(d);
+    const holder = new THREE.Group(); holder.add(v.tree); s.add(holder);
+    const half = Math.max(size.x, size.z) / 2, cam = new THREE.OrthographicCamera(-half, half, size.y, 0, -500, 500); cam.position.set(c.x, box.min.y, 100); cam.lookAt(c.x, box.min.y, 0);
+    const prevTone = renderer.toneMapping; renderer.toneMapping = THREE.NoToneMapping;
+    renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.render(s, cam); renderer.setRenderTarget(null); renderer.toneMapping = prevTone;
+    holder.remove(v.tree);
+    const w = half * 2 * v.scale, h = size.y * v.scale;
+    const p1 = new THREE.PlaneGeometry(w, h); p1.translate(0, h / 2, 0); const p2 = p1.clone(); p2.rotateY(Math.PI / 2);
+    v.impGeo = mergeGeos([p1, p2]);
+    v.impMat = new THREE.MeshLambertMaterial({ map: rt.texture, alphaTest: 0.45, side: THREE.DoubleSide, color: 0xb8b8b8 });
+    v.radius = Math.max(0.25, size.x * 0.012 * v.scale * 4);
+    // Plain leaf material: the generator's wind effect ignores per-tree positions when drawing many at once
+    const lm = v.tree.leavesMesh.material; v.leafMat = new THREE.MeshStandardMaterial({ map: lm.map, alphaTest: lm.alphaTest || 0.5, side: THREE.DoubleSide, color: lm.color, roughness: 0.85 });
+  }
+  // Scatter trees around the clearing (same layout for everyone)
+  const rng = mulberry32(20261020), pts = [], grid = new Map(), cell = 4;
+  const clear = (x, z) => (x > BLD.x0 - 8 && x < BLD.x1 + 8 && z > BLD.z0 - 7 && z < BLD.z1 + 7) || (x > -22 && x < 24 && z > ROAD_Z && z < BLD.z0 + 2) || Math.abs(z - ROAD_Z) < 6.5 || (Math.abs(x) < 4 && z < BLD.z0 && z > ROAD_Z) || (x > 6 && x < 12 && Math.abs(z - (ROAD_Z + 5)) < 2);
+  for (let i = 0; i < 9000 && pts.length < 1300; i++) {
+    const x = lerp(-130, 175, rng()), z = lerp(-180, 110, rng());
+    if (clear(x, z)) continue;
+    const edge = Math.min(Math.abs(z - ROAD_Z) - 6.5, Math.hypot(Math.max(BLD.x0 - 8 - x, 0, x - BLD.x1 - 8), Math.max(BLD.z0 - 7 - z, 0, z - BLD.z1 - 7)));
+    const spacing = edge < 15 ? 4.2 : 6.5 + rng() * 2.5;
+    const gx = Math.floor(x / cell), gz = Math.floor(z / cell); let ok = true;
+    for (let a = -2; a <= 2 && ok; a++) for (let b = -2; b <= 2 && ok; b++) for (const p of grid.get((gx + a) + ',' + (gz + b)) || []) if (Math.hypot(p.x - x, p.z - z) < spacing) { ok = false; break; }
+    if (!ok) continue;
+    const p = { x, z, v: Math.floor(rng() * variants.length), rot: rng() * Math.PI * 2, s: 0.8 + rng() * 0.45 };
+    pts.push(p); const key = gx + ',' + gz; if (!grid.has(key)) grid.set(key, []); grid.get(key).push(p);
+  }
+  // Group trees into 48 m chunks; each chunk shows full trees near you and stand-ins far away
+  const CH = 48, chunks = new Map();
+  for (const p of pts) { const k = Math.floor(p.x / CH) + ',' + Math.floor(p.z / CH); if (!chunks.has(k)) chunks.set(k, []); chunks.get(k).push(p); }
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+  const treeShadows = settings.quality === 'high';
+  for (const [k, list] of chunks) {
+    const [cx, cz] = k.split(',').map(Number);
+    const near = new THREE.Group(), far = new THREE.Group();
+    variants.forEach((v, vi) => {
+      const mine = list.filter((p) => p.v === vi); if (!mine.length) return;
+      const imB = new THREE.InstancedMesh(v.tree.branchesMesh.geometry, v.tree.branchesMesh.material, mine.length);
+      const imL = new THREE.InstancedMesh(v.tree.leavesMesh.geometry, v.leafMat, mine.length);
+      const imF = new THREE.InstancedMesh(v.impGeo, v.impMat, mine.length);
+      mine.forEach((p, i) => {
+        const s = v.scale * p.s; q.setFromAxisAngle(up, p.rot); ps.set(p.x, terrainH(p.x, p.z) - 0.1, p.z);
+        m4.compose(ps, q, sc.set(s, s, s)); imB.setMatrixAt(i, m4); imL.setMatrixAt(i, m4);
+        m4.compose(ps, q, sc.set(p.s, p.s, p.s)); imF.setMatrixAt(i, m4);
+        const gk = Math.floor(p.x / 4) + ',' + Math.floor(p.z / 4); if (!outside.treeCols.has(gk)) outside.treeCols.set(gk, []); outside.treeCols.get(gk).push({ x: p.x, z: p.z, r: 0.35 * p.s });
+      });
+      for (const im of [imB, imL]) { im.castShadow = treeShadows; im.receiveShadow = true; im.computeBoundingSphere(); }
+      imF.computeBoundingSphere();
+      near.add(imB, imL); far.add(imF);
+    });
+    near.visible = false; scene.add(near, far);
+    outside.chunks.push({ x: (cx + 0.5) * CH, z: (cz + 0.5) * CH, near, far, isNear: false });
+  }
+  // Grass tufts and rocks from the EZ-Tree demo (MIT)
+  const base = 'https://cdn.jsdelivr.net/npm/@dgreenheck/ez-tree@1.1.0/src/app/public/';
+  const loadGlb = (f) => new Promise((res) => gltfLoader.load(base + f, (g) => res(g.scene), undefined, () => res(null)));
+  const [grass, rock] = await Promise.all([loadGlb('grass.glb'), loadGlb('rock1.glb')]);
+  const scatter = (model, count, size, area, test) => {
+    if (!model) return; let mesh = null; model.traverse((o) => { if (!mesh && o.isMesh) mesh = o; }); if (!mesh) return;
+    mesh.geometry.computeBoundingBox(); const bb = mesh.geometry.boundingBox, k = size / Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+    const im = new THREE.InstancedMesh(mesh.geometry, mesh.material, count); let n = 0;
+    for (let i = 0; i < count * 4 && n < count; i++) {
+      const x = lerp(area.x0, area.x1, rng()), z = lerp(area.z0, area.z1, rng()); if (!test(x, z)) continue;
+      const s = k * (0.6 + rng() * 0.8); q.setFromAxisAngle(up, rng() * 6.28); m4.compose(ps.set(x, terrainH(x, z) - bb.min.y * s, z), q, sc.set(s, s, s)); im.setMatrixAt(n++, m4);
+    }
+    im.count = n; im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im); return im;
+  };
+  const grassArea = { x0: -45, x1: 60, z0: -90, z1: 25 };
+  const g = scatter(grass, 3500, 0.45, grassArea, (x, z) => !insideBuilding(x, z) && Math.abs(z - ROAD_Z) > 4 && !(Math.abs(x) < 1.8 && z < BLD.z0 && z > ROAD_Z) && !(Math.abs(x) < 3 && z < BLD.z0 && z > BLD.z0 - 3.5));
+  if (g && g.material) { [].concat(g.material).forEach((m) => { m.side = THREE.DoubleSide; m.alphaTest = m.alphaTest || 0.3; if (m.color) m.color.set(0x6f7d45); }); }
+  const r = scatter(rock, 70, 1.4, { x0: -60, x1: 100, z0: -110, z1: 40 }, (x, z) => !clear(x, z) || (Math.abs(z - ROAD_Z) > 7 && !insideBuilding(x, z) && Math.hypot(x, z - BLD.z0) > 12));
+  if (r) r.castShadow = true;
+  outside.ready = true;
+}
+function mergeGeos(list) {
+  const pos = [], nor = [], uvs = [], idx = []; let off = 0;
+  for (const g of list) { const p = g.attributes.position, n = g.attributes.normal, u = g.attributes.uv; for (let i = 0; i < p.count; i++) { pos.push(p.getX(i), p.getY(i), p.getZ(i)); nor.push(n.getX(i), n.getY(i), n.getZ(i)); uvs.push(u.getX(i), u.getY(i)); } for (let i = 0; i < g.index.count; i++) idx.push(g.index.getX(i) + off); off += p.count; }
+  const m = new THREE.BufferGeometry(); m.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); m.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3)); m.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2)); m.setIndex(idx); return m;
+}
+
+// Indoors/outdoors blend: light, fog, sky, sound. f = 0 inside, 1 outside.
+const FOG_IN = new THREE.Color(0x0b0f0d), FOG_OUT = new THREE.Color(0x5d6470), SUN_DIR = new THREE.Vector3(-0.55, 0.32, -0.77).normalize();
+function updateOutdoors(dt, time) {
+  const out = mode === 'game' && me.stage === 'free' && !insideBuilding(me.pos.x, me.pos.z);
+  const target = out ? 1 : (world.chainCut && me.pos.z < HEND + 7 && mode === 'game' ? 0.22 : 0);
+  outside.f += (target - outside.f) * (1 - Math.exp(-dt * 1.4));
+  const f = outside.f, lowQ = settings.quality === 'low';
+  const lit = lowQ ? f * f : lerp(0.35, 1, f);
+  outside.dir.intensity = 2.4 * lit; outside.hemi.intensity = 0.9 * f;
+  const c = mode === 'game' ? camera.position : me.pos;
+  outside.dir.target.position.set(c.x, 0, c.z); outside.dir.position.copy(outside.dir.target.position).addScaledVector(SUN_DIR, 90);
+  scene.fog.color.copy(FOG_IN).lerp(FOG_OUT, f); scene.fog.density = lerp(0.02, 0.016, f);
+  scene.environmentIntensity = lerp(0.04, 0.45, f);
+  renderer.toneMappingExposure = lerp(1.35, 1.0, f);
+  camera.far = f > 0.05 || world.chainCut ? 320 : 70; camera.updateProjectionMatrix();
+  if (sfx.windGain) { sfx.windGain.gain.value = 0.2 * f; sfx.roomGain.gain.value = 0.22 * (1 - 0.8 * f); }
+  if (outside.doorLight) { const fl = Math.random() < 0.015 ? 0.15 : 1; outside.doorLight.intensity = 5 * fl; outside.doorLamp.emissiveIntensity = 1.5 * fl; }
+  // Trees: full detail near you, stand-ins far away
+  const nearR = lowQ ? 55 : 80;
+  for (const ch of outside.chunks) {
+    const d = Math.hypot(ch.x - c.x, ch.z - c.z), want = ch.isNear ? d < nearR + 10 : d < nearR;
+    if (want !== ch.isNear) { ch.isNear = want; ch.near.visible = want; ch.far.visible = !want; }
+  }
+  for (const t of outside.trees) if (t.update) t.update(time);
+  // A crow now and then
+  if (f > 0.8) { outside.crowT -= dt; if (outside.crowT <= 0) { sfx.play('crow'); outside.crowT = rand(18, 45); } }
+  outside.warnT = Math.max(0, outside.warnT - dt);
+}
+function treeCollide(p) {
+  const gx = Math.floor(p.x / 4), gz = Math.floor(p.z / 4);
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (const t of outside.treeCols.get((gx + a) + ',' + (gz + b)) || []) {
+    const dx = p.x - t.x, dz = p.z - t.z, d = Math.hypot(dx, dz), m = R + t.r;
+    if (d < m && d > 1e-4) { p.x = t.x + dx / d * m; p.z = t.z + dz / d * m; }
+  }
+}
+
+// =====================================================================
 // Players
 // =====================================================================
-const world = { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false };
+const world = { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false };
 const me = {
   stage: 'menu', slot: 0, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0,
   baseYaw: 0, strap: 0, crouch: 0, bob: 0, onGround: true, vy: 0, equipped: -1, swing: -1, swingHit: false,
@@ -996,6 +1320,8 @@ function doAction(by, act) {          // host only
     return { a: 'hit', i, off, by };
   }
   if (act.a === 'door' && !world.doorOpen && world.boards.every((b) => b === 0)) { world.doorOpen = true; return { a: 'door', by }; }
+  if (act.a === 'cutters' && world.doorOpen && !world.cuttersOwner) { world.cuttersOwner = by; return { a: 'cutters', by }; }
+  if (act.a === 'chain' && world.cuttersOwner === by && !world.chainCut) { world.chainCut = true; return { a: 'chain', by }; }
   return null;
 }
 function requestAction(act) {
@@ -1015,6 +1341,11 @@ function playFx(fx) {
     if (fx.off) setTimeout(() => { dropBoard(b); sfx.play('boardFall'); }, 80);
   }
   if (fx.a === 'door') openDoor();
+  if (fx.a === 'cutters') { if (cuttersInWorld) cuttersInWorld.visible = false; if (fx.by === net.myId) { sfx.play('pickup'); refreshHotbar(1); toast('Bolt cutters added to your hotbar'); } }
+  if (fx.a === 'chain') {
+    sfx.play('snap'); setTimeout(() => sfx.play('clank'), 250); exitDoor.fall = 0.01; if (fx.by === net.myId) me.shake = Math.max(me.shake, 0.5);
+    setTimeout(openExitDoor, 900);
+  }
 }
 function applyWorldInstant() {   // used when loading a save or joining mid-game
   glassMesh.visible = !world.glass; emergencyGlow.visible = !world.glass; if (axeInBox) axeInBox.visible = !world.glass;
@@ -1024,6 +1355,10 @@ function applyWorldInstant() {   // used when loading a save or joining mid-game
     else { b.position.set(-0.5 + i * 0.35, 0.02, -HZ + 0.7 + (i % 2) * 0.3); b.rotation.set(-Math.PI / 2, 0, 0.3 * i - 0.4); }
   });
   doorPivot.rotation.y = world.doorOpen ? 1.62 : 0; doorState.t = world.doorOpen ? 1 : 0; doorState.opening = false;
+  if (cuttersInWorld) cuttersInWorld.visible = !world.cuttersOwner;
+  exitDoor.opening = false; exitDoor.t = world.chainCut ? 1 : 0; exitDoor.fall = world.chainCut ? 1 : 0;
+  exitDoor.left.rotation.y = world.chainCut ? 1.45 : 0; exitDoor.right.rotation.y = world.chainCut ? -1.45 : 0;
+  exitDoor.chain.position.y = world.chainCut ? -0.85 : 0; exitDoor.chain.rotation.z = world.chainCut ? 0.3 : 0;
   refreshHotbar(false);
 }
 
@@ -1083,15 +1418,20 @@ function updateDoor(dt) {
 // =====================================================================
 const SLOT_COUNT = 5;
 let axeIcon = '';
-function makeAxeIcon() {
-  if (!models.axe) return;
+function makeIcon(model, rotZ = -0.7) {
+  if (!model) return '';
   const r = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true }); r.setSize(128, 128); r.outputColorSpace = THREE.SRGBColorSpace;
   const s = new THREE.Scene(); s.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2.2)); const dl = new THREE.DirectionalLight(0xffffff, 2); dl.position.set(1, 2, 3); s.add(dl);
-  const ax = models.axe.clone(); const box = new THREE.Box3().setFromObject(ax), c = new THREE.Vector3(), sz = new THREE.Vector3(); box.getCenter(c); box.getSize(sz);
-  ax.position.sub(c); const g = new THREE.Group(); const g2 = new THREE.Group(); g2.add(ax); g2.rotation.y = Math.PI / 2; g.add(g2); g.rotation.z = -0.7; s.add(g);
+  const ax = model.clone(); const box = new THREE.Box3().setFromObject(ax), c = new THREE.Vector3(), sz = new THREE.Vector3(); box.getCenter(c); box.getSize(sz);
+  ax.position.sub(c); const g = new THREE.Group(); const g2 = new THREE.Group(); g2.add(ax); g2.rotation.y = Math.PI / 2; g.add(g2); g.rotation.z = rotZ; s.add(g);
   const cam = new THREE.PerspectiveCamera(30, 1, 0.01, 10); cam.position.set(0, 0, Math.max(sz.x, sz.y, sz.z) * 1.75); cam.lookAt(0, 0, 0);
-  r.render(s, cam); axeIcon = r.domElement.toDataURL(); r.dispose(); r.forceContextLoss();
+  r.render(s, cam); const url = r.domElement.toDataURL(); r.dispose(); r.forceContextLoss(); return url;
 }
+const viewCutters = new THREE.Group(); camera.add(viewCutters); viewCutters.visible = false; viewCutters.position.set(0.36, -0.36, -0.6);
+const ITEMS = [
+  { name: 'Axe', has: () => world.axeOwner === net.myId, icon: '', view: null },
+  { name: 'Bolt cutters', has: () => world.cuttersOwner === net.myId, icon: '', view: viewCutters },
+];
 function buildHotbar() {
   const hb = $('hotbar'); hb.innerHTML = '';
   for (let i = 0; i < SLOT_COUNT; i++) {
@@ -1101,23 +1441,26 @@ function buildHotbar() {
   }
 }
 const hasAxe = () => world.axeOwner === net.myId;
-function refreshHotbar(pop) {
+const hasCutters = () => world.cuttersOwner === net.myId;
+function refreshHotbar(pop) {   // pop: slot number to animate (true = slot 1)
   const slots = $('hotbar').children;
+  if (pop === true) pop = 0;
   for (let i = 0; i < SLOT_COUNT; i++) {
-    const el = slots[i]; const item = i === 0 && hasAxe();
+    const el = slots[i], it = ITEMS[i], item = !!(it && it.has() && it.icon);
     let img = el.querySelector('img');
-    if (item && !img) { img = document.createElement('img'); img.src = axeIcon; img.alt = 'Axe'; el.appendChild(img); }
+    if (item && !img) { img = document.createElement('img'); img.src = it.icon; img.alt = it.name; el.appendChild(img); }
     if (!item && img) img.remove();
     el.classList.toggle('on', me.equipped === i);
-    if (pop && item) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
+    if (pop === i && item) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
   }
-  if (me.equipped === 0 && !hasAxe()) me.equipped = -1;
+  if (me.equipped >= 0 && ITEMS[me.equipped] && !ITEMS[me.equipped].has()) me.equipped = -1;
   viewAxe.visible = me.equipped === 0 && hasAxe();
+  viewCutters.visible = me.equipped === 1 && hasCutters();
 }
 function selectSlot(i) {
   if (me.stage !== 'free') return;
   me.equipped = me.equipped === i ? -1 : i;
-  if (me.equipped === 0 && hasAxe()) sfx.play('equip');
+  if (ITEMS[me.equipped] && ITEMS[me.equipped].has()) sfx.play('equip');
   me.swing = -1; refreshHotbar(false);
 }
 
@@ -1201,6 +1544,8 @@ function pressInteract() {
   if (hover === 'box' && !world.glass) requestAction({ a: 'box' });
   if (hover === 'door' && !world.doorOpen && world.boards.every((b) => b === 0)) requestAction({ a: 'door' });
   if (hover.startsWith('jam')) tryJammed(+hover.slice(3));
+  if (hover === 'cutters' && !world.cuttersOwner) requestAction({ a: 'cutters' });
+  if (hover === 'exit' && hasCutters() && !world.chainCut) requestAction({ a: 'chain' });
 }
 function useItem() {
   if (me.stage !== 'free' || me.equipped !== 0 || !hasAxe() || me.swing >= 0) return;
@@ -1440,9 +1785,10 @@ const net = {
   startGame(fresh) {
     if (fresh) { save.game = null; persist(); }
     const g = save.game;
-    Object.assign(world, g ? g.world : { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false });
-    // Only the host's own axe carries over from a save
+    Object.assign(world, { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false }, g ? g.world : {});
+    // Only the host's own items carry over from a save
     if (world.axeOwner && world.axeOwner !== 'host') world.axeOwner = 'host';
+    if (world.cuttersOwner && world.cuttersOwner !== 'host') world.cuttersOwner = 'host';
     this.broadcast({ t: 'start', world, players: [...this.players.values()] });
     startLocal({ fresh: !g, saved: g });
   },
@@ -1493,12 +1839,13 @@ function startLocal({ fresh, saved }) {
   const mine = net.players.get(net.myId); me.slot = mine ? mine.slot : 0;
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
-  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false;
+  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; outside.f = 0;
   $('banner').style.opacity = 0;
   if (saved && saved.me && saved.me.stage === 'free') {
-    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang;
+    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit;
+    me.pos.y = (insideBuilding(s.pos[0], s.pos[2]) ? 0 : terrainH(s.pos[0], s.pos[2])) + EYE;
     beds[me.slot].straps.forEach((st) => (st.visible = false));
-    if (s.equipped === 0 && hasAxe()) me.equipped = 0;
+    if (ITEMS[s.equipped] && ITEMS[s.equipped].has()) me.equipped = s.equipped;
     refreshHotbar(false);
     toast('Welcome back');
   } else {
@@ -1526,7 +1873,7 @@ function saveGame() {
   const pose = me.stage === 'waking' ? standPose(me.slot) : null;
   save.game = {
     world: { ...world, boards: [...world.boards] },
-    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang },
+    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit },
   };
   persist();
 }
@@ -1540,7 +1887,12 @@ let lastObj = '';
 function objective() {
   if (me.stage === 'strapped') return 'Break free from the straps';
   if (me.stage === 'waking') return 'Break free from the straps';
-  if (world.doorOpen) return me.chapterDone ? 'Look around' : 'Explore the hallway';
+  if (world.chainCut) return me.chapterDone ? 'Explore outside' : 'Go outside';
+  if (world.doorOpen) {
+    if (hasCutters()) return 'Cut the chain on the exit door  [F]';
+    if (world.cuttersOwner) return 'Cut the chain on the exit door';
+    return me.seenExit ? 'Find something to cut the chain' : 'Explore the hallway';
+  }
   const left = world.boards.filter((b) => b > 0).length;
   if (left === 0) return 'Open the door  [F]';
   if (hasAxe()) return me.equipped === 0 ? `Chop the boards off the door (${4 - left}/4)` : 'Equip the axe  [1]';
@@ -1566,13 +1918,25 @@ function collide(p) {
   // Stay inside the walkable areas (past the door only once it's open)
   const open = world.doorOpen && doorState.t > 0.6;
   let best = null, bestD = Infinity;
+  const exitOpen = world.chainCut && exitDoor.t > 0.6;
+  let bestZone = null;
   for (const zn of ZONES) {
     if (zn.door && !open) continue;
-    const cx = clamp(p.x, zn.x0 + R, zn.x1 - R), cz = clamp(p.z, zn.z0 + R, zn.z1 - R), d = (cx - p.x) ** 2 + (cz - p.z) ** 2;
-    if (d < bestD) { bestD = d; best = [cx, cz]; }
+    if (zn.exit && !exitOpen) continue;
+    let cx = clamp(p.x, zn.x0 + R, zn.x1 - R), cz = clamp(p.z, zn.z0 + R, zn.z1 - R);
+    if (zn.outdoor && cx > BLD.x0 - R && cx < BLD.x1 + R && cz > BLD.z0 - R && cz < BLD.z1 + R) {   // the building is solid from outside
+      const opts = [[BLD.x0 - R, cz], [BLD.x1 + R, cz], [cx, BLD.z0 - R], [cx, BLD.z1 + R]];
+      [cx, cz] = opts.reduce((a, b) => ((a[0] - p.x) ** 2 + (a[1] - p.z) ** 2 <= (b[0] - p.x) ** 2 + (b[1] - p.z) ** 2 ? a : b));
+    }
+    const d = (cx - p.x) ** 2 + (cz - p.z) ** 2;
+    if (d < bestD) { bestD = d; best = [cx, cz]; bestZone = zn; }
   }
-  if (bestD > 0) { p.x = best[0]; p.z = best[1]; }
-  const dyn = open ? [{ minX: -0.7, maxX: -0.55, minZ: -10.3, maxZ: -9.1 }] : [];   // the open door slab
+  if (bestD > 0) {
+    if (bestZone && bestZone.outdoor && outside.warnT <= 0 && (p.x <= OUT.x0 + R || p.x >= OUT.x1 - R || p.z <= OUT.z0 + R || p.z >= OUT.z1 - R)) { outside.warnT = 8; subtitle("I shouldn't wander too far from the hospital yet.", 2600); }
+    p.x = best[0]; p.z = best[1];
+  }
+  if (exitOpen && !insideBuilding(p.x, p.z)) treeCollide(p);
+  const dyn = (open ? [{ minX: -0.7, maxX: -0.55, minZ: -10.3, maxZ: -9.1 }] : []).concat(exitOpen ? EXIT_LEAVES : []);   // open door slabs
   for (const c of colliders.concat(dyn)) {
     const cx = clamp(p.x, c.minX, c.maxX), cz = clamp(p.z, c.minZ, c.maxZ);
     const dx = p.x - cx, dz = p.z - cz, d2 = dx * dx + dz * dz;
@@ -1629,19 +1993,21 @@ function updatePlayer(dt, pad) {
   me.vel.x = (p.x - me.pos.x) / dt; me.vel.z = (p.z - me.pos.z) / dt;
   me.pos.x = p.x; me.pos.z = p.z;
   // Jump / gravity
+  const outdoorsNow = !insideBuilding(me.pos.x, me.pos.z), ground = outdoorsNow ? terrainH(me.pos.x, me.pos.z) : 0;
   let feet = me.pos.y - eyeHeight();
-  if (!me.onGround) { me.vy -= 9.8 * dt; feet += me.vy * dt; if (feet <= 0) { feet = 0; me.onGround = true; if (me.vy < -2) { sfx.play('step'); me.shake = Math.max(me.shake, 0.25); } me.vy = 0; } }
-  else feet = 0;
+  if (!me.onGround) { me.vy -= 9.8 * dt; feet += me.vy * dt; if (feet <= ground) { feet = ground; me.onGround = true; if (me.vy < -2) { sfx.play('step'); me.shake = Math.max(me.shake, 0.25); } me.vy = 0; } }
+  else feet = ground;
   // Head bob and footsteps
   const speed = Math.hypot(me.vel.x, me.vel.z);
   if (me.onGround && speed > 0.3) {
     me.bob += dt * speed * 2.1;
-    stepAcc += dt * speed; if (stepAcc > (sprint ? 0.95 : 0.75)) { stepAcc = 0; sfx.play('step'); }
+    stepAcc += dt * speed; if (stepAcc > (sprint ? 0.95 : 0.75)) { stepAcc = 0; sfx.play(outdoorsNow ? 'stepOut' : 'step'); }
   } else me.bob = lerp(me.bob, Math.round(me.bob / Math.PI) * Math.PI, 1 - Math.exp(-dt * 6));
   me.pos.y = feet + eyeHeight();
   // Chapter complete
-  if (world.doorOpen && !me.chapterDone && me.pos.z < SIDE_Z0 + 0.3) {
+  if (world.chainCut && !me.chapterDone && me.pos.z < BLD.z0 - 1.2) {
     me.chapterDone = true; sfx.play('chime'); $('banner').style.opacity = 1; setTimeout(() => ($('banner').style.opacity = 0), 5200); saveGame();
+    setTimeout(() => subtitle('Fresh air… The town should be down that road.', 3600), 1500);
   }
   // Axe swing
   if (me.swing >= 0) {
@@ -1691,6 +2057,7 @@ function updateCamera(dt, time) {
     viewAxe.rotation.set(rx, 0, rz);
     viewAxe.position.set(0.42, -0.3 + py + Math.sin(me.bob * 2) * 0.006, -0.62 + pz);
   }
+  if (viewCutters.visible) viewCutters.position.set(0.36, -0.36 + Math.sin(me.bob * 2) * 0.006, -0.6);
 }
 function updateHover() {
   hover = null; let prompt = '', info = false;
@@ -1702,6 +2069,16 @@ function updateHover() {
     if (hover === 'box') {
       if (!world.glass) prompt = '<span class="key">F</span> Break glass';
       else hover = null;
+    } else if (hover === 'cutters') {
+      if (world.cuttersOwner) hover = null; else prompt = '<span class="key">F</span> Pick up bolt cutters';
+    } else if (hover === 'exit') {
+      if (world.chainCut) hover = null;
+      else {
+        if (!me.seenExit) { me.seenExit = true; if (!world.cuttersOwner) subtitle('The chain is too thick to break. Maybe there\'s something at reception.', 3800); }
+        if (hasCutters()) prompt = '<span class="key">F</span> Cut the chain';
+        else if (world.cuttersOwner) { prompt = 'A friend has the bolt cutters'; info = true; }
+        else { prompt = 'Chained shut. I need something to cut the chain.'; info = true; }
+      }
     } else if (hover && hover.startsWith('jam')) {
       prompt = '<span class="key">F</span> Try the door';
     } else if (hover === 'door') {
@@ -1748,7 +2125,7 @@ function tick(dt) {
     updateObjective();
     saveT += dt; if (saveT > 3) { saveT = 0; saveGame(); }
   } else if (mode === 'home') updateMenuCamera(time);
-  updateAvatars(dt); updateShards(dt); updateBoards(dt); updateDoor(dt); updateStraps(dt);
+  updateAvatars(dt); updateShards(dt); updateBoards(dt); updateDoor(dt); updateStraps(dt); updateExitDoor(dt); updateOutdoors(dt, time);
   net.tick(dt);
   // Flickering light
   if (flickerPanel) {
@@ -1778,9 +2155,10 @@ function tick(dt) {
 // =====================================================================
 async function boot() {
   buildHotbar();
-  const [bed, axe, wheelchair, crutches, medbox, trash, cabinet, sold] = await Promise.all([
+  const [bed, axe, wheelchair, crutches, medbox, trash, cabinet, sold, sky] = await Promise.all([
     loadModel('old_bed_frame'), loadModel('wooden_axe'), loadModel('wheelchair_01'), loadModel('vintage_crutches_01'),
     loadModel('medical_box'), loadModel('metal_trash_can'), loadModel('drawer_cabinet'), loadSoldier(),
+    new Promise((res) => new RGBELoader(manager).load('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/aarfontein_dusk_1k.hdr', res, undefined, () => res(null))),
   ]);
   if (bed) models.bed = fit(bed, 2.0, { longX: true });
   if (axe) {
@@ -1795,11 +2173,12 @@ async function boot() {
   if (trash) models.trash = fit(trash, 0.75);
   if (cabinet) models.cabinet = fit(cabinet, 0.75);
   soldier = sold;
+  if (sky) { sky.mapping = THREE.EquirectangularReflectionMapping; scene.background = sky; const pm = new THREE.PMREMGenerator(renderer); scene.environment = pm.fromEquirectangular(sky).texture; pm.dispose(); scene.environmentIntensity = 0.04; scene.backgroundIntensity = 0.85; }
   buildRoom(); buildBeds(); buildProps();
   if (models.axe) {
     const v = models.axe.clone(); v.traverse((o) => { if (o.isMesh) { o.castShadow = false; } });
     v.scale.multiplyScalar(0.8); v.position.set(0, -0.3, 0); v.rotation.set(-0.35, Math.PI / 2 + 0.5, -0.3); viewAxe.add(v);
-    makeAxeIcon();
+    ITEMS[0].icon = makeIcon(models.axe);
   }
   applyQuality(); onResize();
   // Warm up shaders so the first frames don't stutter
@@ -1813,14 +2192,14 @@ async function boot() {
     net.join(invite); setJoinMsg("Joining your friend's room…");
   } else net.host();
   frame();
-  loadHallwayProps();
+  loadHallwayProps().then(loadOutdoorProps);
 }
 boot();
 
 // Test hooks (read-only helpers for automated checks)
 window.__game = { me, world, net, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
   step(sec) { for (let i = 0; i < sec * 60; i++) tick(1 / 60); },
-  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes };
+  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes };
 </script>
 </body>
 </html>
