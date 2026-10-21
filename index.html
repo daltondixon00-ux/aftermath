@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-21.11';
+window.GAME_VERSION = '2026-10-21.12';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -74,8 +74,12 @@ window.GAME_VERSION = '2026-10-21.11';
   #scr-home .left { position: absolute; left: 7vw; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 14px; }
   #scr-home .left .tag { margin: 6px 0 36px 6px; }
   #scr-home .left .btn { justify-content: flex-start; min-width: 300px; }
+  /* Version label lines up with the menu buttons, well clear of the window edge */
+  #version { position: absolute; left: max(48px, 7vw, env(safe-area-inset-left)); bottom: 22px; font-size: 16px;
+    letter-spacing: .12em; color: var(--muted); white-space: nowrap; }
   @media (max-width: 1100px) {
-    #scr-home .left { left: 28px; align-items: flex-start; }
+    #scr-home .left, #version { left: 48px; }
+    #scr-home .left { align-items: flex-start; }
     #scr-home .left h1 { font-size: 72px; }
     #scr-home .left .btn { min-width: 220px; }
   }
@@ -197,7 +201,7 @@ window.GAME_VERSION = '2026-10-21.11';
     <button class="btn" data-act="openSettings">Settings</button>
     <button class="btn" data-act="openExit">Exit</button>
   </div>
-  <div id="version" style="position:absolute;left:28px;bottom:22px;font-size:16px;letter-spacing:.12em;color:var(--muted)"></div>
+  <div id="version"></div>
   <div id="roomPanel">
     <div class="label">Room Code</div>
     <div class="code-row">
