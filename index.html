@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-21.9';
+window.GAME_VERSION = '2026-10-21.10';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -134,7 +134,10 @@ window.GAME_VERSION = '2026-10-21.9';
   #tutorial.show { opacity: 1; transform: none; }
   #tutorial .label { color: var(--amber); margin-bottom: 6px; }
   #tutorial .item { display: flex; align-items: center; gap: 10px; font-size: 25px; font-weight: 600; }
-  #tutorial .box { width: 18px; height: 18px; border: 2px solid var(--muted); border-radius: 3px; flex: none; }
+  #tutorial .box { width: 18px; height: 18px; border: 2px solid var(--muted); border-radius: 3px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1; color: #0b0d0c; transition: background .3s, border-color .3s; }
+  #tutorial.done .box { background: var(--green); border-color: var(--green); }
+  #tutorial.done .box::after { content: '✓'; font-weight: 700; }
+  #tutorial.done .item { color: var(--green); }
   #objective .label { margin-bottom: 4px; }
   #objText { font-size: 28px; font-weight: 600; text-shadow: 0 2px 6px #000; transition: opacity .4s; }
   #objText.done { color: var(--green); }
@@ -916,7 +919,7 @@ async function loadHallwayProps() {
   }
   if (table) { put(fit(table, 0.9), -3.9, 0, -29.1); addCol(-4.4, -3.4, -29.6, -28.6); }
   if (models.cabinet) { put(models.cabinet, -3.0, 0, SIDE_Z1 + 0.32, 0); addCol(-3.4, -2.6, SIDE_Z1, SIDE_Z1 + 0.65); }
-  if (tv) put(fit(tv, 0.55), -3.0, models.cabinet ? topOf(models.cabinet) : 0.75, SIDE_Z1 + 0.32, 0.25);
+  if (tv) { models.tv = fit(tv, 0.55); put(models.tv, -3.0, models.cabinet ? topOf(models.cabinet) : 0.75, SIDE_Z1 + 0.32, 0.25); }
   if (plant) { put(fit(plant, 1.0), -2.0, 0, SIDE_Z1 + 0.4); addCol(-2.35, -1.65, SIDE_Z1, SIDE_Z1 + 0.75); }
   if (desk) {
     const d = fit(desk, 1.4, { longX: true }); put(d, 4.3, 0, -29.0, Math.PI / 2); addCol(3.85, 4.75, -29.75, -28.25);
@@ -977,7 +980,7 @@ function terrainH(x, z) {
   const dx = Math.max(BLD.x0 - 10 - x, 0, x - BLD.x1 - 10), dz = Math.max(BLD.z0 - 10 - z, 0, z - BLD.z1 - 10);
   const dB = Math.hypot(dx, dz), dRoad = Math.max(0, Math.abs(z - ROAD_Z) - 8);
   const dPath = z < BLD.z0 && z > ROAD_Z ? Math.max(0, Math.abs(x) - 5) : 1e9;
-  const d = Math.min(dB, dRoad, dPath), k = d >= 35 ? 1 : (d / 35) * (d / 35) * (3 - 2 * d / 35);
+  const d = Math.min(dB, dRoad, dPath, houseLotDist(x, z)), k = d >= 35 ? 1 : (d / 35) * (d / 35) * (3 - 2 * d / 35);
   return k * (vnoise(x * 0.018, z * 0.018) * 6 + vnoise(x * 0.07 + 11, z * 0.07) * 1.4);
 }
 
@@ -1096,7 +1099,7 @@ function buildOutdoors() {
   const dash = new THREE.InstancedMesh(new THREE.PlaneGeometry(3, 0.14), lineMat, 100); const dm = new THREE.Matrix4(), dq = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
   for (let i = 0; i < 100; i++) { dm.compose(new THREE.Vector3(-450 + i * 9 + rand(-0.3, 0.3), 0.04, ROAD_Z), dq, new THREE.Vector3(1, 1, 1)); dash.setMatrixAt(i, dm); }
   scene.add(dash);
-  const pathMat = pbr('gravel_concrete', 2.5, { color: 0x7d7d78, extra: { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 } });
+  const pathMat = pbr('gravel_concrete_02', 2.5, { color: 0x7d7d78, extra: { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 } });
   const pathLen = (BLD.z0 - 3) - (ROAD_Z + ROAD_W / 2);
   strip(2.4, pathLen, 0, (BLD.z0 - 3 + ROAD_Z + ROAD_W / 2) / 2, pathMat, 0.02);
   strip(5, 3, 0, BLD.z0 - 1.5, pbr('dirty_concrete', 2.5, { extra: { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 } }), 0.025);
@@ -1117,6 +1120,10 @@ async function loadOutdoorProps() {
   if (car) { place(car, 4.6, 18, ROAD_Z + 2.0, 0.08, { longX: true }); addCol(15.6, 20.4, ROAD_Z + 0.9, ROAD_Z + 3.1); }
   if (barrier) { const b = place(barrier, 2.0, -14, ROAD_Z - 1.2, 0.5, { longX: true }); addCol(-15, -13, ROAD_Z - 1.8, ROAD_Z - 0.6); if (b) b.rotation.z = 0.04; }
   if (lamp) { const l = fit(lamp, 6.5); for (const x of [-26, 30, 70]) { const c = l.clone(); c.position.set(x, 0, ROAD_Z + 4.6); c.rotation.y = Math.PI; scene.add(c); addCol(x - 0.15, x + 0.15, ROAD_Z + 4.45, ROAD_Z + 4.75); } }
+  buildHouses();
+  const [sofa, sofa2, arm, coffee, table, chair, cab] = await Promise.all(['Sofa_01', 'sofa_02', 'ArmChair_01', 'CoffeeTable_01', 'WoodenTable_01', 'WoodenChair_01', 'painted_wooden_cabinet'].map(loadModel));
+  furnishHouses({ sofa, sofa2, arm, coffee, table, chair, cab });
+  applyHouseDoors();
   await buildForest();
   renderer.compile(scene, camera);
 }
@@ -1155,7 +1162,7 @@ async function buildForest() {
   }
   // Scatter trees around the clearing (same layout for everyone)
   const rng = mulberry32(20261020), pts = [], grid = new Map(), cell = 4;
-  const clear = (x, z) => (x > BLD.x0 - 8 && x < BLD.x1 + 8 && z > BLD.z0 - 7 && z < BLD.z1 + 7) || (x > -22 && x < 24 && z > ROAD_Z && z < BLD.z0 + 2) || Math.abs(z - ROAD_Z) < 6.5 || (Math.abs(x) < 4 && z < BLD.z0 && z > ROAD_Z) || (x > 6 && x < 12 && Math.abs(z - (ROAD_Z + 5)) < 2);
+  const clear = (x, z) => houseLotDist(x, z) < 4 || (x > BLD.x0 - 8 && x < BLD.x1 + 8 && z > BLD.z0 - 7 && z < BLD.z1 + 7) || (x > -22 && x < 24 && z > ROAD_Z && z < BLD.z0 + 2) || Math.abs(z - ROAD_Z) < 6.5 || (Math.abs(x) < 4 && z < BLD.z0 && z > ROAD_Z) || (x > 6 && x < 12 && Math.abs(z - (ROAD_Z + 5)) < 2);
   for (let i = 0; i < 9000 && pts.length < 1300; i++) {
     const x = lerp(-130, 175, rng()), z = lerp(-180, 110, rng());
     if (clear(x, z)) continue;
@@ -1208,7 +1215,7 @@ async function buildForest() {
     im.count = n; im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im); return im;
   };
   const grassArea = { x0: -45, x1: 60, z0: -90, z1: 25 };
-  const g = scatter(grass, 3500, 0.45, grassArea, (x, z) => !insideBuilding(x, z) && Math.abs(z - ROAD_Z) > 4 && !(Math.abs(x) < 1.8 && z < BLD.z0 && z > ROAD_Z) && !(Math.abs(x) < 3 && z < BLD.z0 && z > BLD.z0 - 3.5));
+  const g = scatter(grass, 3500, 0.45, grassArea, (x, z) => !insideBuilding(x, z) && houseLotDist(x, z) > 0.5 && Math.abs(z - ROAD_Z) > 4 && !(Math.abs(x) < 1.8 && z < BLD.z0 && z > ROAD_Z) && !(Math.abs(x) < 3 && z < BLD.z0 && z > BLD.z0 - 3.5));
   if (g && g.material) { [].concat(g.material).forEach((m) => { m.side = THREE.DoubleSide; m.alphaTest = m.alphaTest || 0.3; if (m.color) m.color.set(0x6f7d45); }); }
   const r = scatter(rock, 70, 1.4, { x0: -60, x1: 100, z0: -110, z1: 40 }, (x, z) => !clear(x, z) || (Math.abs(z - ROAD_Z) > 7 && !insideBuilding(x, z) && Math.hypot(x, z - BLD.z0) > 12));
   if (r) r.castShadow = true;
@@ -1224,7 +1231,7 @@ function mergeGeos(list) {
 const FOG_IN = new THREE.Color(0x0b0f0d), FOG_OUT = new THREE.Color(0x5d6470), SUN_DIR = new THREE.Vector3(-0.55, 0.32, -0.77).normalize();
 function updateOutdoors(dt, time) {
   const out = mode === 'game' && me.stage === 'free' && !insideBuilding(me.pos.x, me.pos.z);
-  const target = out ? 1 : (world.exitOpen && me.pos.z < HEND + 7 && mode === 'game' ? 0.22 : 0);
+  const target = out ? (houseAt(me.pos.x, me.pos.z) >= 0 ? 0.55 : 1) : (world.exitOpen && me.pos.z < HEND + 7 && mode === 'game' ? 0.22 : 0);
   outside.f += (target - outside.f) * (1 - Math.exp(-dt * 1.4));
   const f = outside.f, lowQ = settings.quality === 'low';
   const lit = lowQ ? f * f : lerp(0.35, 1, f);
@@ -1257,9 +1264,187 @@ function treeCollide(p) {
 }
 
 // =====================================================================
+// Houses along the road (enterable; walking into one finds shelter)
+// =====================================================================
+// side 1 = hospital side of the road (front faces the road, -z); side -1 = across the road (front faces +z)
+const HOUSE_W = 9, HOUSE_D = 8, HOUSE_H = 2.7, WALL_T = 0.18;
+const HOUSES = [
+  { x: -34, side: 1, look: 0 }, { x: 34, side: 1, look: 1 }, { x: 60, side: 1, look: 2 },
+  { x: -20, side: -1, look: 1 }, { x: 8, side: -1, look: 2 }, { x: 40, side: -1, look: 0 },
+].map((h, i) => ({ ...h, i, z: ROAD_Z + h.side * (9 + HOUSE_D / 2) }));
+const houseRect = (h, m = 0) => ({ x0: h.x - HOUSE_W / 2 - m, x1: h.x + HOUSE_W / 2 + m, z0: h.z - HOUSE_D / 2 - m, z1: h.z + HOUSE_D / 2 + m });
+// Which house (if any) a point is inside
+function houseAt(x, z) {
+  for (const h of HOUSES) { const r = houseRect(h, -WALL_T); if (x > r.x0 && x < r.x1 && z > r.z0 && z < r.z1) return h.i; }
+  return -1;
+}
+// Distance to the nearest house lot (house plus driveway); used to flatten the ground
+function houseLotDist(x, z) {
+  let d = 1e9;
+  for (const h of HOUSES) {
+    const r = houseRect(h, 3);
+    d = Math.min(d, Math.hypot(Math.max(r.x0 - x, 0, x - r.x1), Math.max(r.z0 - z, 0, z - r.z1)));
+    const fz = h.z - h.side * HOUSE_D / 2, lo = Math.min(fz, ROAD_Z), hi = Math.max(fz, ROAD_Z);
+    if (z > lo && z < hi) d = Math.min(d, Math.max(0, Math.abs(x - h.x) - 2.5));
+  }
+  return d;
+}
+const houseDoors = [];   // per house: { pivot, t, target, closedCol, openCol }
+
+function buildHouses() {
+  const LOOKS = [
+    { wall: pbr('weathered_plank_siding', 2.2, { color: 0xb9c2c6 }), roof: pbr('grey_roof_tiles', 2) , door: 0x5a3a28 },
+    { wall: pbr('exterior_wall_cladding', 2.4, { color: 0xd8cfb8 }), roof: pbr('roof_tiles', 2), door: 0x2f4a3a },
+    { wall: pbr('brick_wall_04', 2.2), roof: pbr('grey_roof_tiles', 2, { color: 0x9a8f88 }), door: 0x6b2a22 },
+  ];
+  const inside = pbr('decrepit_wallpaper', 2.2, { color: 0xd4cbbb });
+  const floorMat = pbr('wood_floor_worn', 2.2);
+  const glassOut = new THREE.MeshStandardMaterial({ color: 0x0c1012, roughness: 0.15, metalness: 0.6 });
+  const glassIn = new THREE.MeshStandardMaterial({ color: 0x1b2430, emissive: 0x3b4a5c, emissiveIntensity: 0.35, roughness: 0.4 });
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0xd9d6cc, roughness: 0.7 });
+  const stepMat = MAT.metal.clone(); stepMat.color.set(0x77736c); stepMat.metalness = 0; stepMat.roughness = 0.9;
+  const gravel = pbr('gravel_concrete_02', 2.5, { color: 0x7d7d78, extra: { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 } });
+  const W = HOUSE_W, D = HOUSE_D, H = HOUSE_H, T = WALL_T;
+
+  for (const h of HOUSES) {
+    const look = LOOKS[h.look], s = h.side;
+    const g = new THREE.Group(); g.position.set(h.x, 0, h.z); g.rotation.y = s > 0 ? 0 : Math.PI; scene.add(g);
+    // local → world, for colliders
+    const col = (x0, x1, z0, z1) => addCol(h.x + s * x0, h.x + s * x1, h.z + s * z0, h.z + s * z1);
+    // A wall box: outside face uses siding, inside face uses wallpaper
+    const wallBox = (w, ht, d, x, y, z, outFace) => {
+      const mats = [look.wall, look.wall, look.wall, look.wall, look.wall, look.wall];
+      mats[outFace ^ 1] = inside;   // the opposite face points into the house
+      const m = new THREE.Mesh(boxMeterUV(new THREE.BoxGeometry(w, ht, d)), mats); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; g.add(m);
+    };
+    // Back, left, right walls (face indexes: 0 +x, 1 -x, 4 +z, 5 -z)
+    wallBox(W, H, T, 0, H / 2, D / 2 - T / 2, 4); col(-W / 2, W / 2, D / 2 - T, D / 2);
+    wallBox(T, H, D, -W / 2 + T / 2, H / 2, 0, 1); col(-W / 2, -W / 2 + T, -D / 2, D / 2);
+    wallBox(T, H, D, W / 2 - T / 2, H / 2, 0, 0); col(W / 2 - T, W / 2, -D / 2, D / 2);
+    // Front wall with a doorway in the middle
+    const DW = 1.1, DH = 2.15, seg = (W - DW) / 2, fz = -D / 2 + T / 2;
+    wallBox(seg, H, T, -W / 2 + seg / 2, H / 2, fz, 5); col(-W / 2, -DW / 2, -D / 2, -D / 2 + T);
+    wallBox(seg, H, T, W / 2 - seg / 2, H / 2, fz, 5); col(DW / 2, W / 2, -D / 2, -D / 2 + T);
+    wallBox(DW, H - DH, T, 0, DH + (H - DH) / 2, fz, 5);
+    // Floor and ceiling
+    const fl = new THREE.Mesh(meterUV(new THREE.PlaneGeometry(W - 2 * T, D - 2 * T), W, D), floorMat); fl.rotation.x = -Math.PI / 2; fl.position.y = 0.025; fl.receiveShadow = true; g.add(fl);
+    const ce = new THREE.Mesh(meterUV(new THREE.PlaneGeometry(W, D), W, D), MAT.ceiling); ce.rotation.x = Math.PI / 2; ce.position.y = H - 0.01; g.add(ce);
+    // Gable roof (ridge runs left-right) with triangle ends
+    // Each slope runs from the eave (y = H, z = ±half) up to the ridge (y = H + rise, z = 0)
+    const rise = 1.7, over = 0.45, half = D / 2 + over, slope = Math.hypot(half, rise);
+    for (const k of [-1, 1]) {
+      const r = new THREE.Mesh(meterUV(new THREE.PlaneGeometry(W + 2 * over, slope), W + 2 * over, slope), look.roof);
+      r.position.set(0, H + rise / 2, k * half / 2); r.rotation.set(-k * Math.atan2(half, rise), 0, 0);
+      r.castShadow = r.receiveShadow = true; r.material.side = THREE.DoubleSide; g.add(r);
+    }
+    const tri = new THREE.BufferGeometry(); tri.setAttribute('position', new THREE.Float32BufferAttribute([0, H, -D / 2, 0, H, D / 2, 0, H + rise, 0], 3));
+    tri.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, D / 2.2, 0, D / 4.4, rise / 2.2], 2)); tri.computeVertexNormals();
+    for (const k of [-1, 1]) { const m = new THREE.Mesh(tri, look.wall); m.material = look.wall; m.position.x = k * W / 2; m.castShadow = true; g.add(m); m.material.side = THREE.DoubleSide; }
+    // Windows (outside dark glass, inside a faint daylight glow); some are boarded
+    const win = (x, y, z, ry, out) => {
+      const f = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 1.15), frameMat); f.position.set(x, y, z); f.rotation.y = ry; g.add(f);
+      const n = new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry));
+      const gl = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 1.0), out ? glassOut : glassIn); gl.position.set(x, y, z); gl.position.addScaledVector(n, 0.004); gl.rotation.y = ry; g.add(gl);
+      // Crossbars so it reads as a window, not a picture
+      for (const [bw, bh] of [[1.15, 0.06], [0.06, 1.0]]) { const b = new THREE.Mesh(new THREE.PlaneGeometry(bw, bh), frameMat); b.position.set(x, y, z); b.position.addScaledVector(n, 0.008); b.rotation.y = ry; g.add(b); }
+      return f;
+    };
+    const winSpots = [[-W / 4 - 0.5, 'front'], [W / 4 + 0.5, 'front'], [0, 'left'], [0, 'right'], [-W / 4, 'back'], [W / 4, 'back']];
+    winSpots.forEach(([p, wall], k) => {
+      const y = 1.55, e = 0.006;
+      let o, inn, ry;
+      if (wall === 'front') { o = [p, y, -D / 2 - e]; inn = [p, y, -D / 2 + T + e]; ry = Math.PI; }
+      if (wall === 'back') { o = [p, y, D / 2 + e]; inn = [p, y, D / 2 - T - e]; ry = 0; }
+      if (wall === 'left') { o = [-W / 2 - e, y, p]; inn = [-W / 2 + T + e, y, p]; ry = -Math.PI / 2; }
+      if (wall === 'right') { o = [W / 2 + e, y, p]; inn = [W / 2 - T - e, y, p]; ry = Math.PI / 2; }
+      win(...o, ry, true); win(...inn, ry + Math.PI, false);
+      if ((h.i + k) % 3 === 0) for (const [yy, rr] of [[1.35, 0.12], [1.75, -0.1]]) {
+        const b = new THREE.Mesh(boxMeterUV(new THREE.BoxGeometry(1.5, 0.16, 0.03)), MAT.planks); b.position.set(o[0], yy, o[2]); b.position.addScaledVector(new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry)), 0.02); b.rotation.set(0, ry, rr); b.castShadow = true; g.add(b);
+      }
+    });
+    // Front step and gravel driveway to the road
+    const step = new THREE.Mesh(new THREE.BoxGeometry(2, 0.1, 1.1), stepMat); step.position.set(0, 0.05, -D / 2 - 0.55); step.receiveShadow = true; g.add(step);
+    const fzW = h.z - s * (D / 2 + 1.1), len = Math.abs(fzW - (ROAD_Z + s * ROAD_W / 2));
+    const dw = new THREE.Mesh(meterUV(new THREE.PlaneGeometry(2.2, len), 2.2, len), gravel); dw.rotation.x = -Math.PI / 2; dw.position.set(h.x, 0.02, (fzW + ROAD_Z + s * ROAD_W / 2) / 2); dw.receiveShadow = true; scene.add(dw);
+    // Door on a hinge; opens inward
+    const pivot = new THREE.Group(); pivot.position.set(-DW / 2, 0, -D / 2 + T / 2); g.add(pivot);
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(DW - 0.04, DH - 0.03, 0.05), new THREE.MeshStandardMaterial({ color: look.door, roughness: 0.6 }));
+    slab.position.set((DW - 0.04) / 2, (DH - 0.03) / 2, 0); slab.castShadow = slab.receiveShadow = true; pivot.add(slab);
+    for (const zz of [-0.04, 0.04]) { const kn = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), MAT.buckle); kn.position.set(DW - 0.16, 1.0, zz); pivot.add(kn); }
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(DW + 0.2, DH, 0.5), new THREE.MeshBasicMaterial()); hit.visible = false; hit.position.set(0, DH / 2, -D / 2 + T / 2); g.add(hit);
+    interactables.push({ mesh: hit, id: 'house' + h.i });
+    const L = (x0, x1, z0, z1) => ({ minX: Math.min(h.x + s * x0, h.x + s * x1), maxX: Math.max(h.x + s * x0, h.x + s * x1), minZ: Math.min(h.z + s * z0, h.z + s * z1), maxZ: Math.max(h.z + s * z0, h.z + s * z1) });
+    houseDoors[h.i] = { pivot, t: 0, target: 0, closedCol: L(-DW / 2, DW / 2, -D / 2, -D / 2 + T), openCol: L(-DW / 2 - 0.05, -DW / 2 + 0.08, -D / 2 + T, -D / 2 + T + DW) };
+    h.group = g;
+  }
+}
+
+// Furniture inside each house (three layouts, picked per house)
+function furnishHouses(m) {
+  const put = (h, model, size, lx, lz, ry, opts = {}) => {
+    if (!model) return null;
+    const base = opts.fitted ? model : fit(model, size, opts);
+    const c = base.clone(); c.position.set(lx, opts.y || 0, lz); c.rotation.y = ry; if (opts.tip) { c.rotation.z = opts.tip; c.position.y += opts.lift || 0.25; }
+    h.group.add(c); h.group.updateMatrixWorld(true);
+    const b = new THREE.Box3().setFromObject(c); addCol(b.min.x + 0.05, b.max.x - 0.05, b.min.z + 0.05, b.max.z - 0.05);
+    return c;
+  };
+  const W = HOUSE_W, D = HOUSE_D;
+  const sofa = m.sofa && fit(m.sofa, 2.0, { longX: true }), sofa2 = m.sofa2 && fit(m.sofa2, 1.9, { longX: true });
+  const arm = m.arm && fit(m.arm, 0.95), coffee = m.coffee && fit(m.coffee, 1.1, { longX: true });
+  const table = m.table && fit(m.table, 1.5, { longX: true }), chair = m.chair && fit(m.chair, 0.95), cab = m.cab && fit(m.cab, 1.6);
+  for (const h of HOUSES) {
+    const v = h.i % 3;
+    if (v === 0) {        // living room
+      put(h, sofa, 0, 0, D / 2 - 0.75, Math.PI, { fitted: true });
+      put(h, coffee, 0, 0, D / 2 - 2.1, 0, { fitted: true });
+      put(h, arm, 0, -W / 2 + 1.0, D / 2 - 2.4, Math.PI / 2, { fitted: true });
+      put(h, models.cabinet, 0, W / 2 - 0.5, 0.6, -Math.PI / 2, { fitted: true });
+      if (models.tv) put(h, models.tv, 0, W / 2 - 0.5, 0.6, -Math.PI / 2, { fitted: true, y: 0.75 });
+      put(h, chair, 0, -W / 2 + 1.2, -D / 2 + 1.4, 0.7, { fitted: true, tip: Math.PI / 2, lift: 0.22 });
+    } else if (v === 1) { // kitchen / dining
+      put(h, table, 0, 0.8, 0.6, 0, { fitted: true });
+      put(h, chair, 0, 0.0, 0.0, Math.PI, { fitted: true }); put(h, chair, 0, 1.6, 1.2, 0, { fitted: true });
+      put(h, chair, 0, 2.6, -1.0, 2.1, { fitted: true, tip: -Math.PI / 2, lift: 0.22 });
+      put(h, cab, 0, -W / 2 + 0.45, D / 2 - 1.2, Math.PI / 2, { fitted: true });
+      put(h, sofa2, 0, -W / 2 + 1.0, -0.6, Math.PI / 2, { fitted: true });
+    } else {              // bedroom
+      if (models.bed) {
+        put(h, models.bed, 0, W / 2 - 1.15, D / 2 - 1.6, Math.PI / 2, { fitted: true });
+        const mat = new THREE.Mesh(new RoundedBoxGeometry(1.9, 0.17, 0.86, 3, 0.06), new THREE.MeshStandardMaterial({ color: 0x9d968a, roughness: 0.95 }));
+        mat.position.set(W / 2 - 1.15, MATTRESS_TOP - 0.085, D / 2 - 1.6); mat.rotation.y = Math.PI / 2; mat.castShadow = mat.receiveShadow = true; h.group.add(mat);
+      }
+      put(h, models.cabinet, 0, W / 2 - 0.4, -0.4, -Math.PI / 2, { fitted: true });
+      put(h, arm, 0, -W / 2 + 1.0, D / 2 - 1.0, Math.PI * 0.75, { fitted: true });
+      put(h, cab, 0, -W / 2 + 0.45, -0.8, Math.PI / 2, { fitted: true });
+      put(h, coffee, 0, -0.8, -0.4, 0.4, { fitted: true });
+    }
+  }
+}
+
+function applyHouseDoors() { houseDoors.forEach((d, i) => { if (d) { d.t = d.target = world.houses && world.houses[i] ? 1 : 0; d.pivot.rotation.y = -1.45 * d.t; } }); }
+function updateHouseDoors(dt) {
+  for (const d of houseDoors) {
+    if (!d) continue;
+    d.t += (d.target - d.t) * (1 - Math.exp(-dt * 5));
+    d.pivot.rotation.y = -1.45 * d.t;
+  }
+}
+function houseColliders() {
+  const out = [];
+  for (const d of houseDoors) if (d) out.push(d.t > 0.6 ? d.openCol : d.closedCol);
+  return out;
+}
+// Find Shelter: tick it off the first time you step inside a house
+function shelterFound() {
+  me.shelter = true; $('tutorial').classList.add('done');
+  sfx.play('chime'); toast('Shelter found'); saveGame();
+}
+
+// =====================================================================
 // Players
 // =====================================================================
-const world = { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false };
+const world = { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false] };
 const me = {
   stage: 'menu', slot: 0, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0,
   baseYaw: 0, strap: 0, crouch: 0, bob: 0, onGround: true, vy: 0, equipped: -1, swing: -1, swingHit: false,
@@ -1347,6 +1532,7 @@ function doAction(by, act) {          // host only
   if (act.a === 'cutters' && world.doorOpen && !world.cuttersOwner) { world.cuttersOwner = by; return { a: 'cutters', by }; }
   if (act.a === 'chain' && world.cuttersOwner === by && !world.chainCut) { world.chainCut = true; return { a: 'chain', by }; }
   if (act.a === 'exitOpen' && world.chainCut && !world.exitOpen) { world.exitOpen = true; return { a: 'exitOpen', by }; }
+  if (act.a === 'house' && act.i >= 0 && act.i < HOUSES.length) { world.houses = world.houses || []; world.houses[act.i] = !world.houses[act.i]; return { a: 'house', i: act.i, open: world.houses[act.i], by }; }
   return null;
 }
 function requestAction(act) {
@@ -1371,6 +1557,7 @@ function playFx(fx) {
     sfx.play('snap'); setTimeout(() => sfx.play('clank'), 250); exitDoor.fall = 0.01; if (fx.by === net.myId) me.shake = Math.max(me.shake, 0.5);
   }
   if (fx.a === 'exitOpen') openExitDoor();
+  if (fx.a === 'house' && houseDoors[fx.i]) { houseDoors[fx.i].target = fx.open ? 1 : 0; sfx.play(fx.open ? 'door' : 'thunk'); }
 }
 function applyWorldInstant() {   // used when loading a save or joining mid-game
   glassMesh.visible = !world.glass; emergencyGlow.visible = !world.glass; if (axeInBox) axeInBox.visible = !world.glass;
@@ -1381,6 +1568,7 @@ function applyWorldInstant() {   // used when loading a save or joining mid-game
   });
   doorPivot.rotation.y = world.doorOpen ? 1.62 : 0; doorState.t = world.doorOpen ? 1 : 0; doorState.opening = false;
   if (cuttersInWorld) cuttersInWorld.visible = !world.cuttersOwner;
+  applyHouseDoors();
   exitDoor.opening = false; exitDoor.t = world.exitOpen ? 1 : 0; exitDoor.fall = world.chainCut ? 1 : 0;
   exitDoor.left.rotation.y = world.exitOpen ? 1.45 : 0; exitDoor.right.rotation.y = world.exitOpen ? -1.45 : 0;
   exitDoor.chain.position.y = world.chainCut ? -0.85 : 0; exitDoor.chain.rotation.z = world.chainCut ? 0.3 : 0;
@@ -1572,6 +1760,7 @@ function pressInteract() {
   if (hover === 'cutters' && !world.cuttersOwner) requestAction({ a: 'cutters' });
   if (hover === 'exit' && hasCutters() && !world.chainCut) requestAction({ a: 'chain' });
   else if (hover === 'exit' && world.chainCut && !world.exitOpen) requestAction({ a: 'exitOpen' });
+  if (hover.startsWith('house')) requestAction({ a: 'house', i: +hover.slice(5) });
 }
 function useItem() {
   if (me.stage !== 'free' || me.equipped !== 0 || !hasAxe() || me.swing >= 0) return;
@@ -1811,7 +2000,7 @@ const net = {
   startGame(fresh) {
     if (fresh) { save.game = null; persist(); }
     const g = save.game;
-    Object.assign(world, { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false }, g ? g.world : {});
+    Object.assign(world, { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false] }, g ? g.world : {});
     // Saves from before this update opened the exit door by itself when the chain was cut
     if (g && g.world.chainCut && g.world.exitOpen === undefined) world.exitOpen = true;
     // Only the host's own items carry over from a save
@@ -1867,15 +2056,16 @@ function startLocal({ fresh, saved }) {
   const mine = net.players.get(net.myId); me.slot = mine ? mine.slot : 0;
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
-  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; outside.f = 0;
-  $('banner').style.opacity = 0; $('tutorial').classList.remove('show');
+  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; outside.f = 0;
+  $('banner').style.opacity = 0; $('tutorial').classList.remove('show', 'done');
   if (saved && saved.me && saved.me.stage === 'free') {
-    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit;
+    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter;
     me.pos.y = (insideBuilding(s.pos[0], s.pos[2]) ? 0 : terrainH(s.pos[0], s.pos[2])) + EYE;
     beds[me.slot].straps.forEach((st) => (st.visible = false));
     if (ITEMS[s.equipped] && ITEMS[s.equipped].has()) me.equipped = s.equipped;
     refreshHotbar(false);
     if (me.chapterDone) $('tutorial').classList.add('show');
+    if (me.shelter) $('tutorial').classList.add('done');
     toast('Welcome back');
   } else {
     const p = lyingPose(me.slot); me.stage = 'strapped'; me.pos.set(p.x, p.y, p.z); me.yaw = me.baseYaw = p.yaw; me.pitch = p.pitch;
@@ -1904,7 +2094,7 @@ function saveGame() {
   const pose = me.stage === 'waking' ? standPose(me.slot) : null;
   save.game = {
     world: { ...world, boards: [...world.boards] },
-    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit },
+    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter },
   };
   persist();
 }
@@ -1968,7 +2158,7 @@ function collide(p) {
     p.x = best[0]; p.z = best[1];
   }
   if (exitOpen && !insideBuilding(p.x, p.z)) treeCollide(p);
-  const dyn = (open ? [{ minX: -0.7, maxX: -0.55, minZ: -10.3, maxZ: -9.1 }] : []).concat(exitOpen ? EXIT_LEAVES : []);   // open door slabs
+  const dyn = (open ? [{ minX: -0.7, maxX: -0.55, minZ: -10.3, maxZ: -9.1 }] : []).concat(exitOpen ? EXIT_LEAVES : [], houseColliders());   // open door slabs
   for (const c of colliders.concat(dyn)) {
     const cx = clamp(p.x, c.minX, c.maxX), cz = clamp(p.z, c.minZ, c.maxZ);
     const dx = p.x - cx, dz = p.z - cz, d2 = dx * dx + dz * dz;
@@ -2042,6 +2232,7 @@ function updatePlayer(dt, pad) {
     setTimeout(() => { if (mode === 'game') { $('tutorial').classList.add('show'); sfx.play('pickup'); } }, 5600);
     setTimeout(() => subtitle('Fresh air… The town should be down that road.', 3600), 1500);
   }
+  if (me.chapterDone && !me.shelter && houseAt(me.pos.x, me.pos.z) >= 0) shelterFound();
   // Axe swing
   if (me.swing >= 0) {
     me.swing += dt / 0.55;
@@ -2104,6 +2295,9 @@ function updateHover() {
     if (hover === 'box') {
       if (!world.glass) prompt = '<span class="key">F</span> Break glass';
       else hover = null;
+    } else if (hover && hover.startsWith('house')) {
+      const d = houseDoors[+hover.slice(5)];
+      prompt = '<span class="key">F</span> ' + (d && d.target ? 'Close the door' : 'Open the door');
     } else if (hover === 'cutters') {
       if (world.cuttersOwner) hover = null; else prompt = '<span class="key">F</span> Pick up bolt cutters';
     } else if (hover === 'exit') {
@@ -2161,7 +2355,7 @@ function tick(dt) {
     updateObjective();
     saveT += dt; if (saveT > 3) { saveT = 0; saveGame(); }
   } else if (mode === 'home') updateMenuCamera(time);
-  updateAvatars(dt); updateShards(dt); updateBoards(dt); updateDoor(dt); updateStraps(dt); updateExitDoor(dt); updateOutdoors(dt, time);
+  updateAvatars(dt); updateShards(dt); updateBoards(dt); updateDoor(dt); updateStraps(dt); updateExitDoor(dt); updateOutdoors(dt, time); updateHouseDoors(dt);
   net.tick(dt);
   // Flickering light
   if (flickerPanel) {
@@ -2238,7 +2432,7 @@ boot();
 // Test hooks (read-only helpers for automated checks)
 window.__game = { me, world, net, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
   step(sec) { for (let i = 0; i < sec * 60; i++) tick(1 / 60); },
-  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes };
+  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, HOUSES, houseDoors, houseAt, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes };
 </script>
 </body>
 </html>
