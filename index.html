@@ -2178,7 +2178,8 @@ async function boot() {
   buildRoom(); buildBeds(); buildProps();
   if (models.axe) {
     const v = models.axe.clone(); v.traverse((o) => { if (o.isMesh) { o.castShadow = false; } });
-    v.position.set(0, -0.22, 0); v.rotation.set(-0.3, -Math.PI / 2 - 0.35, -0.2);   // blade forward, tilted in viewAxe.add(v);
+    // Blade forward, tilted in
+    v.position.set(0, -0.22, 0); v.rotation.set(-0.3, -Math.PI / 2 - 0.35, -0.2); viewAxe.add(v);
     ITEMS[0].icon = makeIcon(models.axe);
   }
   applyQuality(); onResize();
