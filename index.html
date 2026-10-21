@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-21.4';
+window.GAME_VERSION = '2026-10-21.5';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -2071,9 +2071,11 @@ function updateCamera(dt, time) {
       else { const k = ease((s - 0.5) / 0.5); rx = -1.2 * (1 - k); py = -0.1 * (1 - k); pz = -0.15 * (1 - k); }
     }
     viewAxe.rotation.set(rx, 0, rz);
-    viewAxe.position.set(AXE_HOLD.x, AXE_HOLD.y + py + Math.sin(me.bob * 2) * 0.006, AXE_HOLD.z + pz);
+    // Keep it on screen in narrow windows: never further right than ~55% of the visible half-width
+    const halfW = -AXE_HOLD.z * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect;
+    viewAxe.position.set(Math.min(AXE_HOLD.x, halfW * 0.55), AXE_HOLD.y + py + Math.sin(me.bob * 2) * 0.006, AXE_HOLD.z + pz);
   }
-  if (viewCutters.visible) viewCutters.position.set(0.36, -0.36 + Math.sin(me.bob * 2) * 0.006, -0.6);
+  if (viewCutters.visible) viewCutters.position.set(Math.min(0.36, 0.6 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect * 0.55), -0.36 + Math.sin(me.bob * 2) * 0.006, -0.6);
 }
 function updateHover() {
   hover = null; let prompt = '', info = false;
