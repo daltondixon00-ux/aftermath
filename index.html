@@ -1256,7 +1256,8 @@ function standPose(slot) {
 // ---------- Axe in your hands ----------
 const viewAxe = new THREE.Group();   // pivot at the hand
 camera.add(viewAxe); viewAxe.visible = false;
-viewAxe.position.set(0.42, -0.3, -0.62);
+const AXE_HOLD = { x: 0.32, y: -0.34, z: -0.48 };   // where your hand holds the axe on screen
+viewAxe.position.set(AXE_HOLD.x, AXE_HOLD.y, AXE_HOLD.z);
 
 // ---------- Other players' bodies ----------
 function makeLabel(text) {
@@ -2055,7 +2056,7 @@ function updateCamera(dt, time) {
       else { const k = ease((s - 0.5) / 0.5); rx = -1.2 * (1 - k); py = -0.1 * (1 - k); pz = -0.15 * (1 - k); }
     }
     viewAxe.rotation.set(rx, 0, rz);
-    viewAxe.position.set(0.42, -0.3 + py + Math.sin(me.bob * 2) * 0.006, -0.62 + pz);
+    viewAxe.position.set(AXE_HOLD.x, AXE_HOLD.y + py + Math.sin(me.bob * 2) * 0.006, AXE_HOLD.z + pz);
   }
   if (viewCutters.visible) viewCutters.position.set(0.36, -0.36 + Math.sin(me.bob * 2) * 0.006, -0.6);
 }
@@ -2177,7 +2178,7 @@ async function boot() {
   buildRoom(); buildBeds(); buildProps();
   if (models.axe) {
     const v = models.axe.clone(); v.traverse((o) => { if (o.isMesh) { o.castShadow = false; } });
-    v.scale.multiplyScalar(0.8); v.position.set(0, -0.3, 0); v.rotation.set(-0.35, Math.PI / 2 + 0.5, -0.3); viewAxe.add(v);
+    v.position.set(0, -0.22, 0); v.rotation.set(-0.3, -Math.PI / 2 - 0.35, -0.2);   // blade forward, tilted in viewAxe.add(v);
     ITEMS[0].icon = makeIcon(models.axe);
   }
   applyQuality(); onResize();
@@ -2199,7 +2200,7 @@ boot();
 // Test hooks (read-only helpers for automated checks)
 window.__game = { me, world, net, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
   step(sec) { for (let i = 0; i < sec * 60; i++) tick(1 / 60); },
-  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes };
+  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes };
 </script>
 </body>
 </html>
