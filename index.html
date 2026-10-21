@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-21.10';
+window.GAME_VERSION = '2026-10-21.11';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -1373,6 +1373,7 @@ function buildHouses() {
     for (const zz of [-0.04, 0.04]) { const kn = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), MAT.buckle); kn.position.set(DW - 0.16, 1.0, zz); pivot.add(kn); }
     const hit = new THREE.Mesh(new THREE.BoxGeometry(DW + 0.2, DH, 0.5), new THREE.MeshBasicMaterial()); hit.visible = false; hit.position.set(0, DH / 2, -D / 2 + T / 2); g.add(hit);
     interactables.push({ mesh: hit, id: 'house' + h.i });
+    interactables.push({ mesh: slab, id: 'house' + h.i });   // the door itself works too, wherever it has swung to, from either side
     const L = (x0, x1, z0, z1) => ({ minX: Math.min(h.x + s * x0, h.x + s * x1), maxX: Math.max(h.x + s * x0, h.x + s * x1), minZ: Math.min(h.z + s * z0, h.z + s * z1), maxZ: Math.max(h.z + s * z0, h.z + s * z1) });
     houseDoors[h.i] = { pivot, t: 0, target: 0, closedCol: L(-DW / 2, DW / 2, -D / 2, -D / 2 + T), openCol: L(-DW / 2 - 0.05, -DW / 2 + 0.08, -D / 2 + T, -D / 2 + T + DW) };
     h.group = g;
