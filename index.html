@@ -4,6 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Aftermath</title>
+<script>
+// Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
+// so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
+window.GAME_VERSION = '2026-10-21.4';
+(function () {
+  if (!/^https?:$/.test(location.protocol)) return;
+  fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
+    const m = t.match(/GAME_VERSION = '([^']+)'/);
+    if (!m || m[1] === window.GAME_VERSION) return;
+    try { const k = 'aftermath.updatedTo.' + m[1]; if (sessionStorage.getItem(k)) return; sessionStorage.setItem(k, '1'); } catch (e) {}
+    const u = new URL(location.href); u.searchParams.set('v', m[1]); location.replace(u.toString());
+  }).catch(() => {});
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -173,6 +187,7 @@
     <button class="btn" data-act="openSettings">Settings</button>
     <button class="btn" data-act="openExit">Exit</button>
   </div>
+  <div id="version" style="position:absolute;left:28px;bottom:22px;font-size:16px;letter-spacing:.12em;color:var(--muted)"></div>
   <div id="roomPanel">
     <div class="label">Room Code</div>
     <div class="code-row">
@@ -2155,6 +2170,7 @@ function tick(dt) {
 // Boot
 // =====================================================================
 async function boot() {
+  $('version').textContent = 'VERSION ' + window.GAME_VERSION;
   buildHotbar();
   const [bed, axe, wheelchair, crutches, medbox, trash, cabinet, sold, sky] = await Promise.all([
     loadModel('old_bed_frame'), loadModel('wooden_axe'), loadModel('wheelchair_01'), loadModel('vintage_crutches_01'),
