@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-21.13';
+window.GAME_VERSION = '2026-10-21.14';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -2245,7 +2245,7 @@ function updatePlayer(dt, pad) {
   // Chapter complete
   if (world.exitOpen && !me.chapterDone && me.pos.z < BLD.z0 - 1.2) {
     me.chapterDone = true; sfx.play('chime'); $('banner').style.opacity = 1; setTimeout(() => ($('banner').style.opacity = 0), 5200); saveGame();
-    setTimeout(() => { if (mode === 'game') { $('tutorial').classList.add('show'); sfx.play('pickup'); } }, 5600);
+    setTimeout(() => { if (mode === 'game') { $('tutorial').classList.add('show'); sfx.play('pickup'); } }, 1500);
     setTimeout(() => subtitle('Fresh air… The town should be down that road.', 3600), 1500);
   }
   if (me.chapterDone && !me.shelter && houseAt(me.pos.x, me.pos.z) >= 0) shelterFound();
