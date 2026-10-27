@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-26.1';
+window.GAME_VERSION = '2026-10-26.2';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -155,7 +155,9 @@ window.GAME_VERSION = '2026-10-26.1';
   #invTabs { display: flex; flex-direction: column; gap: 10px; width: 210px; flex: none; }
   #invTabs .btn { min-width: 0; width: 100%; justify-content: flex-start; font-size: 22px; padding: 10px 18px; }
   #invTabs .btn.on { border-color: var(--amber); color: var(--amber); }
-  #invBody { width: calc(var(--s) * 5 + 40px); overflow-y: auto; }
+  #invBody { width: calc(var(--s) * 5 + 40px); overflow-y: auto; display: grid; }
+  .invPage { grid-area: 1 / 1; visibility: hidden; }
+  .invPage.on { visibility: visible; }
   #invBody .label { margin-bottom: 8px; }
   .grid { display: grid; grid-template-columns: repeat(5, var(--s)); gap: 8px; }
   .grid .slot { width: var(--s); height: var(--s); cursor: default; }
@@ -1500,7 +1502,7 @@ const world = { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: fa
 const me = {
   stage: 'menu', slot: 0, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0,
   baseYaw: 0, strap: 0, crouch: 0, bob: 0, onGround: true, vy: 0, equipped: -1, swing: -1, swingHit: false,
-  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, wakeT: 0, shake: 0,
+  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, gatherObj: false, wakeT: 0, shake: 0,
 };
 const remotes = new Map();   // id -> avatar
 
@@ -1845,7 +1847,10 @@ const ui = {
     if (locked) { wantLock = false; document.exitPointerLock(); }
   },
   back() {
-    if (this.stack.length) { this.stack.pop(); this.render(); if (mode === 'game' && !this.stack.length) lockPointer(); return; }
+    if (this.stack.length) {
+      // Closing the inventory the first time gives the next objective
+      if (this.stack[this.stack.length - 1] === 'inv' && !me.gatherObj) { me.gatherObj = true; saveGame(); }
+      this.stack.pop(); this.render(); if (mode === 'game' && !this.stack.length) lockPointer(); return; }
     if (mode === 'game') this.open('pause');
   },
   render() {
@@ -1876,25 +1881,26 @@ function toggleInventory() {
 }
 function renderInventory() {
   for (const b of $('invTabs').children) b.classList.toggle('on', b.dataset.tab === invTab);
-  const body = $('invBody');
-  if (invTab === 'inventory') {
-    const slot = (i, bar) => {
-      const it = bar ? ITEMS[i] : null, has = !!(it && it.has() && it.icon);
-      return `<div class="slot${bar && me.equipped === i ? ' on' : ''}"${bar ? ` data-bar="${i}"` : ''}>${bar ? `<span class="n">${i + 1}</span>` : ''}${has ? `<img src="${it.icon}" alt="${it.name}">` : ''}</div>`;
-    };
-    let grid = ''; for (let i = 0; i < INV_ROWS * INV_COLS; i++) grid += slot(i, false);
-    let bar = ''; for (let i = 0; i < SLOT_COUNT; i++) bar += slot(i, true);
-    body.innerHTML = `<div class="label">Inventory</div><div class="grid">${grid}</div>
-      <div id="invBar"><div class="label">Hotbar</div><div class="grid">${bar}</div></div>`;
-  } else if (invTab === 'objectives') {
-    const tut = [];
-    if (me.chapterDone) tut.push(['Find Shelter', me.shelter]);
-    if (me.shelter) tut.push(['Use Tab to open inventory', me.invOpened]);
-    body.innerHTML = `<div class="label">Objective</div><div class="invText" style="margin-bottom:16px">${objective().replace(/\s*\[[^\]]*\]$/, '')}</div>`
-      + (tut.length ? `<div class="label">Tutorial</div><ul class="invList">${tut.map(([t, d]) => `<li class="${d ? 'done' : ''}">${d ? '✓' : '☐'} ${t}</li>`).join('')}</ul>` : '');
-  } else {
-    body.innerHTML = `<div class="label">${invTab === 'crafting' ? 'Crafting' : 'Notes'}</div><div class="invText muted">Nothing here yet.</div>`;
-  }
+  // All four pages are stacked in the same spot and only the open one is visible,
+  // so the window is always the size of the Inventory page whichever topic is open.
+  const slot = (i, bar) => {
+    const it = bar ? ITEMS[i] : null, has = !!(it && it.has() && it.icon);
+    return `<div class="slot${bar && me.equipped === i ? ' on' : ''}"${bar ? ` data-bar="${i}"` : ''}>${bar ? `<span class="n">${i + 1}</span>` : ''}${has ? `<img src="${it.icon}" alt="${it.name}">` : ''}</div>`;
+  };
+  let grid = ''; for (let i = 0; i < INV_ROWS * INV_COLS; i++) grid += slot(i, false);
+  let bar = ''; for (let i = 0; i < SLOT_COUNT; i++) bar += slot(i, true);
+  const tut = [];
+  if (me.chapterDone) tut.push(['Find Shelter', me.shelter]);
+  if (me.shelter) tut.push(['Use Tab to open inventory', me.invOpened]);
+  const pages = {
+    inventory: `<div class="label">Inventory</div><div class="grid">${grid}</div>
+      <div id="invBar"><div class="label">Hotbar</div><div class="grid">${bar}</div></div>`,
+    crafting: `<div class="label">Crafting</div><div class="invText muted">Nothing here yet.</div>`,
+    objectives: `<div class="label">Objective</div><div class="invText" style="margin-bottom:16px">${objective().replace(/\s*\[[^\]]*\]$/, '')}</div>`
+      + (tut.length ? `<div class="label">Tutorial</div><ul class="invList">${tut.map(([t, d]) => `<li class="${d ? 'done' : ''}">${d ? '✓' : '☐'} ${t}</li>`).join('')}</ul>` : ''),
+    notes: `<div class="label">Notes</div><div class="invText muted">Nothing here yet.</div>`,
+  };
+  $('invBody').innerHTML = Object.entries(pages).map(([k, html]) => `<div class="invPage${k === invTab ? ' on' : ''}" data-page="${k}">${html}</div>`).join('');
 }
 $('invTabs').addEventListener('click', (e) => { const t = e.target.closest('[data-tab]'); if (!t) return; t.blur(); invTab = t.dataset.tab; renderInventory(); });
 $('invBody').addEventListener('click', (e) => { const s = e.target.closest('[data-bar]'); if (!s) return; selectSlot(+s.dataset.bar); renderInventory(); });
@@ -2147,10 +2153,10 @@ function startLocal({ fresh, saved }) {
   const mine = net.players.get(net.myId); me.slot = mine ? mine.slot : 0;
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
-  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; outside.f = 0;
+  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; outside.f = 0;
   $('banner').style.opacity = 0; $('tutorial').classList.remove('show'); $('tutShelter').classList.remove('done'); $('tutInv').classList.remove('show', 'done');
   if (saved && saved.me && saved.me.stage === 'free') {
-    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened;
+    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj;
     me.pos.y = (insideBuilding(s.pos[0], s.pos[2]) ? 0 : terrainH(s.pos[0], s.pos[2])) + EYE;
     beds[me.slot].straps.forEach((st) => (st.visible = false));
     if (ITEMS[s.equipped] && ITEMS[s.equipped].has()) me.equipped = s.equipped;
@@ -2197,7 +2203,7 @@ function saveGame() {
   const pose = me.stage === 'waking' ? standPose(me.slot) : null;
   save.game = {
     world: { ...world, boards: [...world.boards] },
-    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened },
+    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj },
   };
   persist();
 }
@@ -2211,7 +2217,7 @@ let lastObj = '';
 function objective() {
   if (me.stage === 'strapped') return 'Break free from the straps';
   if (me.stage === 'waking') return 'Break free from the straps';
-  if (world.exitOpen) return me.chapterDone ? 'Explore outside' : 'Go outside';
+  if (world.exitOpen) return !me.chapterDone ? 'Go outside' : me.gatherObj ? 'Gather Wood and Stone' : 'Explore outside';
   if (world.chainCut) return 'Open the door  [F]';
   if (world.doorOpen) {
     if (hasCutters()) return 'Cut the chain on the exit door  [F]';
