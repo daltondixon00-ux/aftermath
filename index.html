@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-26.4';
+window.GAME_VERSION = '2026-10-26.5';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -372,6 +372,7 @@ window.GAME_VERSION = '2026-10-26.4';
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
@@ -546,6 +547,8 @@ manager.onProgress = (url, done, total) => { $('loadBar').style.width = (done / 
 manager.setURLModifier((url) => url.replace(/\/Models\/gltf\/1k\/([^/]+)\/textures\//, '/Models/jpg/1k/$1/'));
 const texLoader = new THREE.TextureLoader(manager);
 const gltfLoader = new GLTFLoader(manager);
+// Some free models (like the forest boulders) are compressed with Draco and need this decoder to load
+gltfLoader.setDRACOLoader(new DRACOLoader().setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/'));
 const PH_TEX = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/';
 const PH_MODEL = (n) => `https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/${n}/${n}_1k.gltf`;
 const maxAniso = renderer.capabilities.getMaxAnisotropy();
@@ -1261,20 +1264,26 @@ async function buildForest() {
   const base = 'https://cdn.jsdelivr.net/npm/@dgreenheck/ez-tree@1.1.0/src/app/public/';
   const loadGlb = (f) => new Promise((res) => gltfLoader.load(base + f, (g) => res(g.scene), undefined, () => res(null)));
   const [grass, rock, stone] = await Promise.all([loadGlb('grass.glb'), loadGlb('rock1.glb'), loadModel('namaqualand_stones_01')]);   // Poly Haven (CC0): five real fist-sized stones
-  const scatter = (model, count, size, area, test) => {
-    if (!model) return; let mesh = null; model.traverse((o) => { if (!mesh && o.isMesh) mesh = o; }); if (!mesh) return;
+  const scatter = (model, count, size, area, test, onPlace, sink = 0) => {   // sink: how much of the height goes into the ground
+    if (!model) return; let src = null; model.traverse((o) => { if (!src && o.isMesh) src = o; }); if (!src) return;
+    // Bake the model's own offset/turn into the shape so it sits on the ground the right way up
+    model.updateMatrixWorld(true); const mesh = { geometry: src.geometry.clone().applyMatrix4(src.matrixWorld), material: src.material };
     mesh.geometry.computeBoundingBox(); const bb = mesh.geometry.boundingBox, k = size / Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
     const im = new THREE.InstancedMesh(mesh.geometry, mesh.material, count); let n = 0;
     for (let i = 0; i < count * 4 && n < count; i++) {
       const x = lerp(area.x0, area.x1, rng()), z = lerp(area.z0, area.z1, rng()); if (!test(x, z)) continue;
-      const s = k * (0.6 + rng() * 0.8); q.setFromAxisAngle(up, rng() * 6.28); m4.compose(ps.set(x, terrainH(x, z) - bb.min.y * s, z), q, sc.set(s, s, s)); im.setMatrixAt(n++, m4);
+      const s = k * (0.6 + rng() * 0.8); q.setFromAxisAngle(up, rng() * 6.28); m4.compose(ps.set(x, terrainH(x, z) - bb.min.y * s - sink * (bb.max.y - bb.min.y) * s, z), q, sc.set(s, s, s)); im.setMatrixAt(n++, m4);
+      if (onPlace) onPlace(x, z, s / k * size);
     }
     im.count = n; im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im); return im;
   };
   const grassArea = { x0: -45, x1: 60, z0: -90, z1: 25 };
   const g = scatter(grass, 3500, 0.45, grassArea, (x, z) => !insideBuilding(x, z) && houseLotDist(x, z) > 0.5 && Math.abs(z - ROAD_Z) > 4 && !(Math.abs(x) < 1.8 && z < BLD.z0 && z > ROAD_Z) && !(Math.abs(x) < 3 && z < BLD.z0 && z > BLD.z0 - 3.5));
   if (g && g.material) { [].concat(g.material).forEach((m) => { m.side = THREE.DoubleSide; m.alphaTest = m.alphaTest || 0.3; if (m.color) m.color.set(0x6f7d45); }); }
-  const r = scatter(rock, 70, 1.4, { x0: -60, x1: 100, z0: -110, z1: 40 }, (x, z) => !clear(x, z) || (Math.abs(z - ROAD_Z) > 7 && !insideBuilding(x, z) && Math.hypot(x, z - BLD.z0) > 12));
+  // Boulders: kept out of the house yards and driveways, and solid (they block you like tree trunks)
+  const r = scatter(rock, 70, 1.4, { x0: -60, x1: 100, z0: -110, z1: 40 },
+    (x, z) => houseLotDist(x, z) > 2 && (!clear(x, z) || (Math.abs(z - ROAD_Z) > 7 && !insideBuilding(x, z) && Math.hypot(x, z - BLD.z0) > 12)),
+    (x, z, w) => { const gk = Math.floor(x / 4) + ',' + Math.floor(z / 4); if (!outside.treeCols.has(gk)) outside.treeCols.set(gk, []); outside.treeCols.get(gk).push({ x, z, r: w * 0.42 }); }, 0.12);
   if (r) r.castShadow = true;
   outside.treePts = pts; outside.variants = variants;
   buildLooseStones(stone);
