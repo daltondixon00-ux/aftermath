@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-21.14';
+window.GAME_VERSION = '2026-10-26.1';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -139,9 +139,36 @@ window.GAME_VERSION = '2026-10-21.14';
   #tutorial .label { color: var(--amber); margin-bottom: 6px; }
   #tutorial .item { display: flex; align-items: center; gap: 10px; font-size: 25px; font-weight: 600; }
   #tutorial .box { width: 18px; height: 18px; border: 2px solid var(--muted); border-radius: 3px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1; color: #0b0d0c; transition: background .3s, border-color .3s; }
-  #tutorial.done .box { background: var(--green); border-color: var(--green); }
-  #tutorial.done .box::after { content: '✓'; font-weight: 700; }
-  #tutorial.done .item { color: var(--green); }
+  #tutorial .item + .item { margin-top: 6px; }
+  #tutorial .item.done { color: var(--green); }
+  #tutorial .item.done .box { background: var(--green); border-color: var(--green); }
+  #tutorial .item.done .box::after { content: '✓'; font-weight: 700; }
+  #tutorial #tutInv { display: none; }
+  #tutorial #tutInv.show { display: flex; animation: slideIn .5s ease-out; }
+  @keyframes slideIn { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: none; } }
+
+  /* Inventory: topics on the left, the 5×5 grid and the hotbar on the right */
+  /* --s = box size; the panel sits below the Back button and shrinks the boxes on short windows so nothing is cut off */
+  #scr-inv { --s: 74px; }
+  #scr-inv .inv { display: flex; gap: 22px; padding: 24px; border-radius: 6px; background: var(--panel); border: 2px solid var(--line);
+    max-width: 96vw; max-height: calc(100vh - 96px); margin-top: 64px; }
+  #invTabs { display: flex; flex-direction: column; gap: 10px; width: 210px; flex: none; }
+  #invTabs .btn { min-width: 0; width: 100%; justify-content: flex-start; font-size: 22px; padding: 10px 18px; }
+  #invTabs .btn.on { border-color: var(--amber); color: var(--amber); }
+  #invBody { width: calc(var(--s) * 5 + 40px); overflow-y: auto; }
+  #invBody .label { margin-bottom: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(5, var(--s)); gap: 8px; }
+  .grid .slot { width: var(--s); height: var(--s); cursor: default; }
+  .grid .slot img { width: calc(var(--s) - 14px); height: calc(var(--s) - 14px); }
+  #invBar { margin-top: 18px; padding-top: 14px; border-top: 2px solid var(--line); }
+  #invBar .slot { cursor: pointer; }
+  .invText { font-size: 24px; line-height: 1.4; }
+  .invText.muted { color: var(--muted); }
+  .invList { list-style: none; margin: 4px 0 16px; padding: 0; font-size: 24px; }
+  .invList li.done { color: var(--green); }
+  @media (max-height: 759px) { #scr-inv { --s: 62px; } }
+  @media (max-height: 620px) { #scr-inv { --s: 52px; } #scr-inv .inv { padding: 16px; } }
+  @media (max-width: 760px) { #scr-inv { --s: min(62px, calc((100vw - 120px) / 5)); } #scr-inv .inv { flex-direction: column; } #invTabs { flex-direction: row; flex-wrap: wrap; width: auto; } #invTabs .btn { width: auto; } }
   #objective .label { margin-bottom: 4px; }
   #objText { font-size: 28px; font-weight: 600; text-shadow: 0 2px 6px #000; transition: opacity .4s; }
   #objText.done { color: var(--green); }
@@ -261,6 +288,7 @@ window.GAME_VERSION = '2026-10-21.14';
       <b>Interact</b><span>F · X</span>
       <b>Hotbar</b><span>1–5 or mouse wheel · LB / RB</span>
       <b>Use item</b><span>Left click · RT</span>
+      <b>Inventory</b><span>Tab · Back</span>
       <b>Pause / back</b><span>Esc · Start</span>
     </div>
   </div>
@@ -283,10 +311,27 @@ window.GAME_VERSION = '2026-10-21.14';
   <button class="btn danger" data-act="quit">Home Menu</button>
 </div>
 
+<!-- Inventory (Tab) -->
+<div class="screen dim center" id="scr-inv">
+  <button class="btn small back" data-act="back">← Back</button>
+  <div class="inv">
+    <div id="invTabs">
+      <button class="btn" data-tab="inventory">Inventory</button>
+      <button class="btn" data-tab="crafting">Crafting</button>
+      <button class="btn" data-tab="objectives">Objectives</button>
+      <button class="btn" data-tab="notes">Notes</button>
+    </div>
+    <div id="invBody"></div>
+  </div>
+</div>
+
 <!-- HUD -->
 <div class="screen" id="hud">
   <div id="objective"><div class="label">Objective</div><div id="objText"></div></div>
-  <div id="tutorial"><div class="label">Tutorial</div><div class="item"><span class="box"></span>Find Shelter</div></div>
+  <div id="tutorial"><div class="label">Tutorial</div>
+    <div class="item" id="tutShelter"><span class="box"></span>Find Shelter</div>
+    <div class="item" id="tutInv"><span class="box"></span>Use Tab to open inventory</div>
+  </div>
   <div id="crosshair"></div>
   <div id="prompt"></div>
   <svg id="holdRing" viewBox="0 0 84 84">
@@ -1442,8 +1487,10 @@ function houseColliders() {
 }
 // Find Shelter: tick it off the first time you step inside a house
 function shelterFound() {
-  me.shelter = true; $('tutorial').classList.add('done');
+  me.shelter = true; $('tutShelter').classList.add('done');
   sfx.play('chime'); toast('Shelter found'); saveGame();
+  // Next tutorial task, and Tab now opens the inventory
+  setTimeout(() => { if (mode === 'game' && me.shelter) { $('tutInv').classList.add('show'); sfx.play('pickup'); } }, 1500);
 }
 
 // =====================================================================
@@ -1453,7 +1500,7 @@ const world = { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: fa
 const me = {
   stage: 'menu', slot: 0, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0,
   baseYaw: 0, strap: 0, crouch: 0, bob: 0, onGround: true, vy: 0, equipped: -1, swing: -1, swingHit: false,
-  seenDoor: false, chapterDone: false, wakeT: 0, shake: 0,
+  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, wakeT: 0, shake: 0,
 };
 const remotes = new Map();   // id -> avatar
 
@@ -1692,6 +1739,7 @@ addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') { if (e.key === 'Escape') { e.target.blur(); ui.back(); } else if (e.key === 'Enter' && e.target.id === 'joinInput') actions.join(); return; }
   keys[e.code] = true;
   if (e.key === 'Escape') { e.preventDefault(); ui.back(); return; }
+  if (e.code === 'Tab') { e.preventDefault(); if (mode === 'game' && !e.repeat) toggleInventory(); return; }
   if (mode !== 'game' || ui.stack.length) return;
   if (/^Digit[1-5]$/.test(e.code)) selectSlot(+e.code.slice(5) - 1);
   if (e.code === 'KeyF' && !e.repeat) pressInteract();
@@ -1734,8 +1782,9 @@ function pollPad(dt) {
   const st = { lx: dz(p.axes[0] || 0), ly: dz(p.axes[1] || 0), rx: dz(p.axes[2] || 0), ry: dz(p.axes[3] || 0), interact: b(2), sprint: b(10), crouch: b(1) };
   const any = p.buttons.some((x) => x.pressed) || st.lx || st.ly || st.rx || st.ry;
   if (any && !padActive) { padActive = true; updateClickHint(); }
-  const pA = pressed(0), pB = pressed(1), pX = pressed(2), pLB = pressed(4), pRB = pressed(5), pRT = pressed(7), pStart = pressed(9), pUp = pressed(12), pDown = pressed(13);
-  if (mode === 'game' && !ui.stack.length) {
+  const pA = pressed(0), pB = pressed(1), pX = pressed(2), pLB = pressed(4), pRB = pressed(5), pRT = pressed(7), pBack = pressed(8), pStart = pressed(9), pUp = pressed(12), pDown = pressed(13);
+  if (pBack && mode === 'game') toggleInventory();
+  else if (mode === 'game' && !ui.stack.length) {
     look(st.rx * 900 * dt, st.ry * 600 * dt, 0.0022);
     if (pA) jump(); if (pX) pressInteract(); if (pRT) useItem();
     if (pLB) selectSlot(((me.equipped < 0 ? 0 : me.equipped) - 1 + SLOT_COUNT) % SLOT_COUNT);
@@ -1802,9 +1851,10 @@ const ui = {
   render() {
     const top = this.stack[this.stack.length - 1];
     $('scr-home').classList.toggle('show', mode === 'home');
-    for (const n of ['play', 'settings', 'exit', 'pause']) $('scr-' + n).classList.toggle('show', top === n);
+    for (const n of ['play', 'settings', 'exit', 'pause', 'inv']) $('scr-' + n).classList.toggle('show', top === n);
     $('hud').classList.toggle('show', mode === 'game' && !this.stack.length);
     if (top === 'settings') syncSettingsUI();
+    if (top === 'inv') renderInventory();
     if (top === 'play') syncPlayUI();
     updateClickHint();
   },
@@ -1813,6 +1863,42 @@ const ui = {
     return el ? [...el.querySelectorAll('button:not(:disabled)')].filter((b) => b.offsetParent) : [];
   },
 };
+
+// Inventory (Tab). Locked until Find Shelter is done. Hotbar items show only in the hotbar row, never in the grid.
+const INV_ROWS = 5, INV_COLS = 5;
+let invTab = 'inventory';
+function toggleInventory() {
+  const top = ui.stack[ui.stack.length - 1];
+  if (top === 'inv') { ui.back(); return; }
+  if (ui.stack.length || me.stage !== 'free' || !me.shelter) return;
+  ui.open('inv');
+  if (!me.invOpened) { me.invOpened = true; $('tutInv').classList.add('done'); sfx.play('chime'); saveGame(); }
+}
+function renderInventory() {
+  for (const b of $('invTabs').children) b.classList.toggle('on', b.dataset.tab === invTab);
+  const body = $('invBody');
+  if (invTab === 'inventory') {
+    const slot = (i, bar) => {
+      const it = bar ? ITEMS[i] : null, has = !!(it && it.has() && it.icon);
+      return `<div class="slot${bar && me.equipped === i ? ' on' : ''}"${bar ? ` data-bar="${i}"` : ''}>${bar ? `<span class="n">${i + 1}</span>` : ''}${has ? `<img src="${it.icon}" alt="${it.name}">` : ''}</div>`;
+    };
+    let grid = ''; for (let i = 0; i < INV_ROWS * INV_COLS; i++) grid += slot(i, false);
+    let bar = ''; for (let i = 0; i < SLOT_COUNT; i++) bar += slot(i, true);
+    body.innerHTML = `<div class="label">Inventory</div><div class="grid">${grid}</div>
+      <div id="invBar"><div class="label">Hotbar</div><div class="grid">${bar}</div></div>`;
+  } else if (invTab === 'objectives') {
+    const tut = [];
+    if (me.chapterDone) tut.push(['Find Shelter', me.shelter]);
+    if (me.shelter) tut.push(['Use Tab to open inventory', me.invOpened]);
+    body.innerHTML = `<div class="label">Objective</div><div class="invText" style="margin-bottom:16px">${objective().replace(/\s*\[[^\]]*\]$/, '')}</div>`
+      + (tut.length ? `<div class="label">Tutorial</div><ul class="invList">${tut.map(([t, d]) => `<li class="${d ? 'done' : ''}">${d ? '✓' : '☐'} ${t}</li>`).join('')}</ul>` : '');
+  } else {
+    body.innerHTML = `<div class="label">${invTab === 'crafting' ? 'Crafting' : 'Notes'}</div><div class="invText muted">Nothing here yet.</div>`;
+  }
+}
+$('invTabs').addEventListener('click', (e) => { const t = e.target.closest('[data-tab]'); if (!t) return; t.blur(); invTab = t.dataset.tab; renderInventory(); });
+$('invBody').addEventListener('click', (e) => { const s = e.target.closest('[data-bar]'); if (!s) return; selectSlot(+s.dataset.bar); renderInventory(); });
+
 let toastTimer;
 function toast(t, ms = 2400) { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), ms); }
 const subTimers = [];
@@ -2061,16 +2147,17 @@ function startLocal({ fresh, saved }) {
   const mine = net.players.get(net.myId); me.slot = mine ? mine.slot : 0;
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
-  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; outside.f = 0;
-  $('banner').style.opacity = 0; $('tutorial').classList.remove('show', 'done');
+  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; outside.f = 0;
+  $('banner').style.opacity = 0; $('tutorial').classList.remove('show'); $('tutShelter').classList.remove('done'); $('tutInv').classList.remove('show', 'done');
   if (saved && saved.me && saved.me.stage === 'free') {
-    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter;
+    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened;
     me.pos.y = (insideBuilding(s.pos[0], s.pos[2]) ? 0 : terrainH(s.pos[0], s.pos[2])) + EYE;
     beds[me.slot].straps.forEach((st) => (st.visible = false));
     if (ITEMS[s.equipped] && ITEMS[s.equipped].has()) me.equipped = s.equipped;
     refreshHotbar(false);
     if (me.chapterDone) $('tutorial').classList.add('show');
-    if (me.shelter) $('tutorial').classList.add('done');
+    if (me.shelter) { $('tutShelter').classList.add('done'); $('tutInv').classList.add('show'); }
+    if (me.invOpened) $('tutInv').classList.add('done');
     toast('Welcome back');
   } else {
     const p = lyingPose(me.slot); me.stage = 'strapped'; me.pos.set(p.x, p.y, p.z); me.yaw = me.baseYaw = p.yaw; me.pitch = p.pitch;
@@ -2110,7 +2197,7 @@ function saveGame() {
   const pose = me.stage === 'waking' ? standPose(me.slot) : null;
   save.game = {
     world: { ...world, boards: [...world.boards] },
-    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter },
+    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened },
   };
   persist();
 }
