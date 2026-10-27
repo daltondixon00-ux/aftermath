@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-26.2';
+window.GAME_VERSION = '2026-10-26.3';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -132,19 +132,21 @@ window.GAME_VERSION = '2026-10-26.2';
   /* HUD */
   #hud { pointer-events: none; }
   #objective { position: absolute; top: 28px; left: 32px; max-width: 460px; }
-  #tutorial { position: absolute; top: 112px; left: 32px; min-width: 220px; padding: 12px 18px 14px; border-radius: 6px;
+  /* Objective list: outside, it takes the place of the single objective line and grows one item at a time */
+  #objList { position: absolute; top: 28px; left: 32px; min-width: 220px; padding: 12px 18px 14px; border-radius: 6px;
     background: var(--panel); border: 2px solid var(--line); border-left: 4px solid var(--amber);
     opacity: 0; transform: translateX(-24px); transition: opacity .5s, transform .5s; }
-  #tutorial.show { opacity: 1; transform: none; }
-  #tutorial .label { color: var(--amber); margin-bottom: 6px; }
-  #tutorial .item { display: flex; align-items: center; gap: 10px; font-size: 25px; font-weight: 600; }
-  #tutorial .box { width: 18px; height: 18px; border: 2px solid var(--muted); border-radius: 3px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1; color: #0b0d0c; transition: background .3s, border-color .3s; }
-  #tutorial .item + .item { margin-top: 6px; }
-  #tutorial .item.done { color: var(--green); }
-  #tutorial .item.done .box { background: var(--green); border-color: var(--green); }
-  #tutorial .item.done .box::after { content: '✓'; font-weight: 700; }
-  #tutorial #tutInv { display: none; }
-  #tutorial #tutInv.show { display: flex; animation: slideIn .5s ease-out; }
+  #objList.show { opacity: 1; transform: none; }
+  #hud.list #objective { display: none; }
+  #objList .label { color: var(--amber); margin-bottom: 6px; }
+  #objList .item { display: none; align-items: center; gap: 10px; font-size: 25px; font-weight: 600; }
+  #objList .item.show { display: flex; }
+  #objList .item.new { animation: slideIn .5s ease-out; }
+  #objList .box { width: 18px; height: 18px; border: 2px solid var(--muted); border-radius: 3px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1; color: #0b0d0c; transition: background .3s, border-color .3s; }
+  #objList .item.show ~ .item.show { margin-top: 6px; }
+  #objList .item.done { color: var(--green); }
+  #objList .item.done .box { background: var(--green); border-color: var(--green); }
+  #objList .item.done .box::after { content: '✓'; font-weight: 700; }
   @keyframes slideIn { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: none; } }
 
   /* Inventory: topics on the left, the 5×5 grid and the hotbar on the right */
@@ -198,7 +200,7 @@ window.GAME_VERSION = '2026-10-26.2';
   #toast { position: absolute; top: 28px; left: 50%; transform: translateX(-50%); padding: 10px 22px; border-radius: 4px;
     background: var(--panel); border: 2px solid var(--line); font-size: 22px; opacity: 0; transition: opacity .3s; white-space: nowrap; z-index: 60; }
   #toast.show { opacity: 1; }
-  #clickHint { position: absolute; left: 50%; top: 18%; transform: translate(-50%, -50%); font-size: 26px; padding: 14px 26px;
+  #clickHint { position: absolute; left: 50%; top: max(18%, 222px);   /* stays below the objective box */ transform: translate(-50%, -50%); font-size: 26px; padding: 14px 26px;
     background: var(--panel); border: 2px solid var(--amber); border-radius: 6px; display: none; pointer-events: none; }
   #banner { position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); text-align: center; opacity: 0; transition: opacity 1.2s; }
   #banner .tag { color: var(--green); }
@@ -330,9 +332,10 @@ window.GAME_VERSION = '2026-10-26.2';
 <!-- HUD -->
 <div class="screen" id="hud">
   <div id="objective"><div class="label">Objective</div><div id="objText"></div></div>
-  <div id="tutorial"><div class="label">Tutorial</div>
-    <div class="item" id="tutShelter"><span class="box"></span>Find Shelter</div>
-    <div class="item" id="tutInv"><span class="box"></span>Use Tab to open inventory</div>
+  <div id="objList"><div class="label">Objective</div>
+    <div class="item" id="objShelter"><span class="box"></span>Find Shelter</div>
+    <div class="item" id="objInv"><span class="box"></span>Use Tab to open inventory</div>
+    <div class="item" id="objGather"><span class="box"></span>Gather Wood and Stone</div>
   </div>
   <div id="crosshair"></div>
   <div id="prompt"></div>
@@ -1487,12 +1490,25 @@ function houseColliders() {
   for (const d of houseDoors) if (d) out.push(d.t > 0.6 ? d.openCol : d.closedCol);
   return out;
 }
+// Objective list (outside): Find Shelter → Use Tab to open inventory → Gather Wood and Stone.
+// Each item appears once the one before it is done; done items stay with a green ✓.
+function showObjList(on) {
+  $('objList').classList.toggle('show', on); $('hud').classList.toggle('list', on);
+  for (const [id, shown, done] of [['objShelter', on, me.shelter], ['objInv', on && me.shelter, me.invOpened], ['objGather', on && me.gatherObj, false]]) {
+    $(id).classList.toggle('show', shown); $(id).classList.toggle('done', shown && done);
+  }
+}
+// A new objective slides into the list (only once, not every time a menu closes)
+function addObjective(id) {
+  const el = $(id); el.classList.add('show', 'new'); sfx.play('pickup');
+  setTimeout(() => el.classList.remove('new'), 600);
+}
 // Find Shelter: tick it off the first time you step inside a house
 function shelterFound() {
-  me.shelter = true; $('tutShelter').classList.add('done');
+  me.shelter = true; $('objShelter').classList.add('done');
   sfx.play('chime'); toast('Shelter found'); saveGame();
-  // Next tutorial task, and Tab now opens the inventory
-  setTimeout(() => { if (mode === 'game' && me.shelter) { $('tutInv').classList.add('show'); sfx.play('pickup'); } }, 1500);
+  // Next objective, and Tab now opens the inventory
+  setTimeout(() => { if (mode === 'game' && me.shelter) addObjective('objInv'); }, 1500);
 }
 
 // =====================================================================
@@ -1849,7 +1865,10 @@ const ui = {
   back() {
     if (this.stack.length) {
       // Closing the inventory the first time gives the next objective
-      if (this.stack[this.stack.length - 1] === 'inv' && !me.gatherObj) { me.gatherObj = true; saveGame(); }
+      if (this.stack[this.stack.length - 1] === 'inv' && !me.gatherObj) {
+        me.gatherObj = true; saveGame();
+        setTimeout(() => { if (mode === 'game' && me.gatherObj) addObjective('objGather'); }, 400);
+      }
       this.stack.pop(); this.render(); if (mode === 'game' && !this.stack.length) lockPointer(); return; }
     if (mode === 'game') this.open('pause');
   },
@@ -1877,7 +1896,7 @@ function toggleInventory() {
   if (top === 'inv') { ui.back(); return; }
   if (ui.stack.length || me.stage !== 'free' || !me.shelter) return;
   ui.open('inv');
-  if (!me.invOpened) { me.invOpened = true; $('tutInv').classList.add('done'); sfx.play('chime'); saveGame(); }
+  if (!me.invOpened) { me.invOpened = true; $('objInv').classList.add('done'); sfx.play('chime'); saveGame(); }
 }
 function renderInventory() {
   for (const b of $('invTabs').children) b.classList.toggle('on', b.dataset.tab === invTab);
@@ -1889,15 +1908,15 @@ function renderInventory() {
   };
   let grid = ''; for (let i = 0; i < INV_ROWS * INV_COLS; i++) grid += slot(i, false);
   let bar = ''; for (let i = 0; i < SLOT_COUNT; i++) bar += slot(i, true);
-  const tut = [];
-  if (me.chapterDone) tut.push(['Find Shelter', me.shelter]);
-  if (me.shelter) tut.push(['Use Tab to open inventory', me.invOpened]);
+  // Same list as the objective box: outside it grows one item at a time, before that it's the current step
+  const objs = !me.chapterDone ? [[objective().replace(/\s*\[[^\]]*\]$/, ''), false]] : [['Find Shelter', me.shelter]];
+  if (me.chapterDone && me.shelter) objs.push(['Use Tab to open inventory', me.invOpened]);
+  if (me.chapterDone && me.gatherObj) objs.push(['Gather Wood and Stone', false]);
   const pages = {
     inventory: `<div class="label">Inventory</div><div class="grid">${grid}</div>
       <div id="invBar"><div class="label">Hotbar</div><div class="grid">${bar}</div></div>`,
     crafting: `<div class="label">Crafting</div><div class="invText muted">Nothing here yet.</div>`,
-    objectives: `<div class="label">Objective</div><div class="invText" style="margin-bottom:16px">${objective().replace(/\s*\[[^\]]*\]$/, '')}</div>`
-      + (tut.length ? `<div class="label">Tutorial</div><ul class="invList">${tut.map(([t, d]) => `<li class="${d ? 'done' : ''}">${d ? '✓' : '☐'} ${t}</li>`).join('')}</ul>` : ''),
+    objectives: `<div class="label">Objective</div><ul class="invList">${objs.map(([t, d]) => `<li class="${d ? 'done' : ''}">${d ? '✓' : '☐'} ${t}</li>`).join('')}</ul>`,
     notes: `<div class="label">Notes</div><div class="invText muted">Nothing here yet.</div>`,
   };
   $('invBody').innerHTML = Object.entries(pages).map(([k, html]) => `<div class="invPage${k === invTab ? ' on' : ''}" data-page="${k}">${html}</div>`).join('');
@@ -2154,16 +2173,14 @@ function startLocal({ fresh, saved }) {
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
   me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; outside.f = 0;
-  $('banner').style.opacity = 0; $('tutorial').classList.remove('show'); $('tutShelter').classList.remove('done'); $('tutInv').classList.remove('show', 'done');
+  $('banner').style.opacity = 0; showObjList(false);
   if (saved && saved.me && saved.me.stage === 'free') {
     const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj;
     me.pos.y = (insideBuilding(s.pos[0], s.pos[2]) ? 0 : terrainH(s.pos[0], s.pos[2])) + EYE;
     beds[me.slot].straps.forEach((st) => (st.visible = false));
     if (ITEMS[s.equipped] && ITEMS[s.equipped].has()) me.equipped = s.equipped;
     refreshHotbar(false);
-    if (me.chapterDone) $('tutorial').classList.add('show');
-    if (me.shelter) { $('tutShelter').classList.add('done'); $('tutInv').classList.add('show'); }
-    if (me.invOpened) $('tutInv').classList.add('done');
+    if (me.chapterDone) showObjList(true);
     toast('Welcome back');
   } else {
     const p = lyingPose(me.slot); me.stage = 'strapped'; me.pos.set(p.x, p.y, p.z); me.yaw = me.baseYaw = p.yaw; me.pitch = p.pitch;
@@ -2217,7 +2234,7 @@ let lastObj = '';
 function objective() {
   if (me.stage === 'strapped') return 'Break free from the straps';
   if (me.stage === 'waking') return 'Break free from the straps';
-  if (world.exitOpen) return !me.chapterDone ? 'Go outside' : me.gatherObj ? 'Gather Wood and Stone' : 'Explore outside';
+  if (world.exitOpen) return !me.chapterDone ? 'Go outside' : me.gatherObj ? 'Gather Wood and Stone' : me.shelter ? 'Use Tab to open inventory' : 'Find Shelter';
   if (world.chainCut) return 'Open the door  [F]';
   if (world.doorOpen) {
     if (hasCutters()) return 'Cut the chain on the exit door  [F]';
@@ -2233,6 +2250,8 @@ function objective() {
 function updateObjective() {
   const t = objective(); if (t === lastObj) return;
   const el = $('objText');
+  // Outside, the objective list shows the steps (with its own chimes), so the single line stays quiet
+  if ($('hud').classList.contains('list')) { el.textContent = t; lastObj = t; return; }
   const changedStep = lastObj && lastObj.split(' (')[0] !== t.split(' (')[0];
   if (changedStep) {
     el.textContent = '✓ ' + lastObj.replace(/\s+\[\w+\]$/, ''); el.classList.add('done'); sfx.play('chime');
@@ -2338,7 +2357,7 @@ function updatePlayer(dt, pad) {
   // Chapter complete
   if (world.exitOpen && !me.chapterDone && me.pos.z < BLD.z0 - 1.2) {
     me.chapterDone = true; sfx.play('chime'); $('banner').style.opacity = 1; setTimeout(() => ($('banner').style.opacity = 0), 5200); saveGame();
-    setTimeout(() => { if (mode === 'game') { $('tutorial').classList.add('show'); sfx.play('pickup'); } }, 1500);
+    setTimeout(() => { if (mode === 'game' && me.chapterDone) { showObjList(true); sfx.play('pickup'); } }, 1500);
     setTimeout(() => subtitle('Fresh air… The town should be down that road.', 3600), 1500);
   }
   if (me.chapterDone && !me.shelter && houseAt(me.pos.x, me.pos.z) >= 0) shelterFound();
