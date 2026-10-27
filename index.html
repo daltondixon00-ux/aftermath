@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-26.3';
+window.GAME_VERSION = '2026-10-26.4';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -131,22 +131,20 @@ window.GAME_VERSION = '2026-10-26.3';
 
   /* HUD */
   #hud { pointer-events: none; }
-  #objective { position: absolute; top: 28px; left: 32px; max-width: 460px; }
-  /* Objective list: outside, it takes the place of the single objective line and grows one item at a time */
-  #objList { position: absolute; top: 28px; left: 32px; min-width: 220px; padding: 12px 18px 14px; border-radius: 6px;
-    background: var(--panel); border: 2px solid var(--line); border-left: 4px solid var(--amber);
-    opacity: 0; transform: translateX(-24px); transition: opacity .5s, transform .5s; }
-  #objList.show { opacity: 1; transform: none; }
-  #hud.list #objective { display: none; }
-  #objList .label { color: var(--amber); margin-bottom: 6px; }
-  #objList .item { display: none; align-items: center; gap: 10px; font-size: 25px; font-weight: 600; }
-  #objList .item.show { display: flex; }
-  #objList .item.new { animation: slideIn .5s ease-out; }
-  #objList .box { width: 18px; height: 18px; border: 2px solid var(--muted); border-radius: 3px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1; color: #0b0d0c; transition: background .3s, border-color .3s; }
-  #objList .item.show ~ .item.show { margin-top: 6px; }
-  #objList .item.done { color: var(--green); }
-  #objList .item.done .box { background: var(--green); border-color: var(--green); }
-  #objList .item.done .box::after { content: '✓'; font-weight: 700; }
+  /* Objective box: one objective at a time. A finished one flashes a green ✓, then the next takes its place.
+     Finished objectives are listed under "Chapter 1" on the inventory's Objectives page. */
+  #objective { position: absolute; top: 28px; left: 32px; min-width: 220px; max-width: 460px; padding: 12px 18px 14px; border-radius: 6px;
+    background: var(--panel); border: 2px solid var(--line); border-left: 4px solid var(--amber); }
+  #objective .label { color: var(--amber); margin-bottom: 6px; }
+  #objItem { display: flex; align-items: flex-start; gap: 10px; font-size: 25px; font-weight: 600; transition: opacity .4s; }
+  #objItem .box { margin-top: 7px; width: 18px; height: 18px; border: 2px solid var(--muted); border-radius: 3px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1; color: #0b0d0c; transition: background .3s, border-color .3s; }
+  #objItem.done { color: var(--green); }
+  #objItem.done .box { background: var(--green); border-color: var(--green); }
+  #objItem.done .box::after { content: '✓'; font-weight: 700; }
+  #objItem.soon { color: var(--muted); font-style: italic; }
+  #objItem.soon .box { display: none; }
+  #objItem.new { animation: slideIn .5s ease-out; }
+  #objText .sub { display: block; font-size: 18px; font-weight: 500; color: var(--muted); }
   @keyframes slideIn { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: none; } }
 
   /* Inventory: topics on the left, the 5×5 grid and the hotbar on the right */
@@ -160,6 +158,10 @@ window.GAME_VERSION = '2026-10-26.3';
   #invBody { width: calc(var(--s) * 5 + 40px); overflow-y: auto; display: grid; }
   .invPage { grid-area: 1 / 1; visibility: hidden; }
   .invPage.on { visibility: visible; }
+  /* Only the Inventory page sets the size; longer pages (like Chapter 1) scroll inside it */
+  .invPage:not([data-page="inventory"]) { height: 0; min-height: 100%; overflow-y: auto; }
+  .slot .cnt { position: absolute; right: 5px; bottom: 2px; font-size: 17px; font-weight: 700; text-shadow: 0 1px 3px #000; }
+  .slot .nm { font-size: 14px; color: var(--muted); text-align: center; line-height: 1.1; }
   #invBody .label { margin-bottom: 8px; }
   .grid { display: grid; grid-template-columns: repeat(5, var(--s)); gap: 8px; }
   .grid .slot { width: var(--s); height: var(--s); cursor: default; }
@@ -168,14 +170,16 @@ window.GAME_VERSION = '2026-10-26.3';
   #invBar .slot { cursor: pointer; }
   .invText { font-size: 24px; line-height: 1.4; }
   .invText.muted { color: var(--muted); }
-  .invList { list-style: none; margin: 4px 0 16px; padding: 0; font-size: 24px; }
+  .invList { list-style: none; margin: 4px 0 16px; padding: 0; font-size: 21px; line-height: 1.35; }
   .invList li.done { color: var(--green); }
   @media (max-height: 759px) { #scr-inv { --s: 62px; } }
   @media (max-height: 620px) { #scr-inv { --s: 52px; } #scr-inv .inv { padding: 16px; } }
   @media (max-width: 760px) { #scr-inv { --s: min(62px, calc((100vw - 120px) / 5)); } #scr-inv .inv { flex-direction: column; } #invTabs { flex-direction: row; flex-wrap: wrap; width: auto; } #invTabs .btn { width: auto; } }
-  #objective .label { margin-bottom: 4px; }
-  #objText { font-size: 28px; font-weight: 600; text-shadow: 0 2px 6px #000; transition: opacity .4s; }
-  #objText.done { color: var(--green); }
+  /* Tiny tree health bar just above the crosshair */
+  #treeBar { position: absolute; left: 50%; top: calc(50% - 30px); width: 84px; height: 8px; margin-left: -42px; border-radius: 4px;
+    background: rgba(0, 0, 0, .6); border: 1px solid rgba(236, 230, 216, .35); overflow: hidden; opacity: 0; transition: opacity .25s; }
+  #treeBar.show { opacity: 1; }
+  #treeBarFill { height: 100%; width: 100%; background: var(--amber); transition: width .25s; }
   #crosshair { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%;
     background: rgba(236, 230, 216, .75); box-shadow: 0 0 3px #000; transition: transform .12s, background .12s; }
   #crosshair.hot { transform: scale(1.8); background: var(--amber); }
@@ -331,13 +335,9 @@ window.GAME_VERSION = '2026-10-26.3';
 
 <!-- HUD -->
 <div class="screen" id="hud">
-  <div id="objective"><div class="label">Objective</div><div id="objText"></div></div>
-  <div id="objList"><div class="label">Objective</div>
-    <div class="item" id="objShelter"><span class="box"></span>Find Shelter</div>
-    <div class="item" id="objInv"><span class="box"></span>Use Tab to open inventory</div>
-    <div class="item" id="objGather"><span class="box"></span>Gather Wood and Stone</div>
-  </div>
+  <div id="objective"><div class="label">Objective</div><div id="objItem"><span class="box"></span><span id="objText"></span></div></div>
   <div id="crosshair"></div>
+  <div id="treeBar"><div id="treeBarFill"></div></div>
   <div id="prompt"></div>
   <svg id="holdRing" viewBox="0 0 84 84">
     <circle cx="42" cy="42" r="36" stroke="rgba(0,0,0,.5)"></circle>
@@ -1225,7 +1225,7 @@ async function buildForest() {
     const gx = Math.floor(x / cell), gz = Math.floor(z / cell); let ok = true;
     for (let a = -2; a <= 2 && ok; a++) for (let b = -2; b <= 2 && ok; b++) for (const p of grid.get((gx + a) + ',' + (gz + b)) || []) if (Math.hypot(p.x - x, p.z - z) < spacing) { ok = false; break; }
     if (!ok) continue;
-    const p = { x, z, v: Math.floor(rng() * variants.length), rot: rng() * Math.PI * 2, s: 0.8 + rng() * 0.45 };
+    const p = { id: pts.length, x, z, v: Math.floor(rng() * variants.length), rot: rng() * Math.PI * 2, s: 0.8 + rng() * 0.45, refs: [] };
     pts.push(p); const key = gx + ',' + gz; if (!grid.has(key)) grid.set(key, []); grid.get(key).push(p);
   }
   // Group trees into 48 m chunks; each chunk shows full trees near you and stand-ins far away
@@ -1244,8 +1244,11 @@ async function buildForest() {
       mine.forEach((p, i) => {
         const s = v.scale * p.s; q.setFromAxisAngle(up, p.rot); ps.set(p.x, terrainH(p.x, p.z) - 0.1, p.z);
         m4.compose(ps, q, sc.set(s, s, s)); imB.setMatrixAt(i, m4); imL.setMatrixAt(i, m4);
+        p.refs.push([imB, i, m4.clone()], [imL, i, m4.clone()]);
         m4.compose(ps, q, sc.set(p.s, p.s, p.s)); imF.setMatrixAt(i, m4);
-        const gk = Math.floor(p.x / 4) + ',' + Math.floor(p.z / 4); if (!outside.treeCols.has(gk)) outside.treeCols.set(gk, []); outside.treeCols.get(gk).push({ x: p.x, z: p.z, r: 0.35 * p.s });
+        p.refs.push([imF, i, m4.clone()]);
+        p.col = { x: p.x, z: p.z, r: 0.35 * p.s, p };
+        const gk = Math.floor(p.x / 4) + ',' + Math.floor(p.z / 4); if (!outside.treeCols.has(gk)) outside.treeCols.set(gk, []); outside.treeCols.get(gk).push(p.col);
       });
       for (const im of [imB, imL]) { im.castShadow = treeShadows; im.receiveShadow = true; im.computeBoundingSphere(); }
       imF.computeBoundingSphere();
@@ -1257,7 +1260,7 @@ async function buildForest() {
   // Grass tufts and rocks from the EZ-Tree demo (MIT)
   const base = 'https://cdn.jsdelivr.net/npm/@dgreenheck/ez-tree@1.1.0/src/app/public/';
   const loadGlb = (f) => new Promise((res) => gltfLoader.load(base + f, (g) => res(g.scene), undefined, () => res(null)));
-  const [grass, rock] = await Promise.all([loadGlb('grass.glb'), loadGlb('rock1.glb')]);
+  const [grass, rock, stone] = await Promise.all([loadGlb('grass.glb'), loadGlb('rock1.glb'), loadModel('namaqualand_stones_01')]);   // Poly Haven (CC0): five real fist-sized stones
   const scatter = (model, count, size, area, test) => {
     if (!model) return; let mesh = null; model.traverse((o) => { if (!mesh && o.isMesh) mesh = o; }); if (!mesh) return;
     mesh.geometry.computeBoundingBox(); const bb = mesh.geometry.boundingBox, k = size / Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
@@ -1273,7 +1276,133 @@ async function buildForest() {
   if (g && g.material) { [].concat(g.material).forEach((m) => { m.side = THREE.DoubleSide; m.alphaTest = m.alphaTest || 0.3; if (m.color) m.color.set(0x6f7d45); }); }
   const r = scatter(rock, 70, 1.4, { x0: -60, x1: 100, z0: -110, z1: 40 }, (x, z) => !clear(x, z) || (Math.abs(z - ROAD_Z) > 7 && !insideBuilding(x, z) && Math.hypot(x, z - BLD.z0) > 12));
   if (r) r.castShadow = true;
+  outside.treePts = pts; outside.variants = variants;
+  buildLooseStones(stone);
+  makeGatherIcons(stone, variants);
   outside.ready = true;
+  if (mode === 'game') applyNature();
+}
+
+// =====================================================================
+// Gathering: loose stones (F to pick up) and trees (hold click with the axe)
+// =====================================================================
+const TREE_HITS = 5, STONE_COUNT = 45;
+outside.stones = []; outside.falling = []; outside.stumps = new Map();
+// Fist-sized stones scattered over the yards, roadside and forest edge (same spots for everyone)
+function buildLooseStones(model) {
+  if (!model) return;
+  // Each stone shape, centred, sized to about 11 cm across
+  const kinds = []; model.traverse((o) => { if (o.isMesh) {
+    const geo = o.geometry.clone(); geo.center(); geo.computeBoundingBox(); const b = geo.boundingBox;
+    const mat = o.material.clone(); mat.color.setScalar(1.45);   // a touch lighter than the leafy ground so they're easy to spot
+    kinds.push({ geo, mat, k: 0.11 / Math.max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z), h: b.max.y });
+  } });
+  if (!kinds.length) return;
+  const rng = mulberry32(4242), hitGeo = new THREE.SphereGeometry(0.17, 8, 6), hitMat = new THREE.MeshBasicMaterial();
+  const ok = (x, z) => !insideBuilding(x, z) && !HOUSES.some((h) => { const r = houseRect(h, 0.6); return x > r.x0 && x < r.x1 && z > r.z0 && z < r.z1; }) && Math.abs(z - ROAD_Z) > 5
+    && !(Math.abs(x) < 2.5 && z < BLD.z0 && z > ROAD_Z) && !(x > BLD.x0 - 2 && x < BLD.x1 + 2 && z > BLD.z0 - 2 && z < BLD.z1 + 2)
+    && !outside.stones.some((s) => Math.hypot(s.x - x, s.z - z) < 3)
+    && ![...(outside.treeCols.get(Math.floor(x / 4) + ',' + Math.floor(z / 4)) || [])].some((t) => Math.hypot(t.x - x, t.z - z) < t.r + 0.5);
+  for (let tries = 0; tries < 4000 && outside.stones.length < STONE_COUNT; tries++) {
+    const x = lerp(-44, 94, rng()), z = lerp(-99, 28, rng()); if (!ok(x, z)) continue;
+    const kind = kinds[outside.stones.length % kinds.length], s = kind.k * (0.85 + rng() * 0.35), mesh = new THREE.Mesh(kind.geo, kind.mat);
+    mesh.scale.setScalar(s); mesh.rotation.set((rng() - 0.5) * 0.3, rng() * 6.28, (rng() - 0.5) * 0.3);
+    mesh.position.set(x, terrainH(x, z) + kind.h * s * 0.8, z);   // sits slightly into the dirt
+    mesh.receiveShadow = true; scene.add(mesh);   // too small to need a shadow
+    const hit = new THREE.Mesh(hitGeo, hitMat); hit.visible = false; hit.position.set(x, terrainH(x, z) + 0.06, z); scene.add(hit);
+    const i = outside.stones.length; outside.stones.push({ x, z, mesh, hit }); interactables.push({ mesh: hit, id: 'rock' + i });
+  }
+}
+// Inventory pictures for Stone and Wood
+function makeGatherIcons(rock, variants) {
+  const st = outside.stones[1] || outside.stones[0];
+  if (st) INV_DEFS.stone.icon = makeIcon(new THREE.Mesh(st.mesh.geometry, st.mesh.material), -0.2);
+  const bark = variants[2] && variants[2].tree.branchesMesh.material.map;
+  const log = new THREE.Group();
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 0.55, 14), new THREE.MeshStandardMaterial({ map: bark || null, color: 0x9a8670, roughness: 0.9 }));
+  // The icon maker turns things a quarter turn, so the log lies along z here to end up side-on
+  cyl.rotation.x = Math.PI / 2; log.add(cyl);
+  const end = new THREE.Mesh(new THREE.CircleGeometry(0.09, 14), new THREE.MeshStandardMaterial({ color: 0xc9a77a, roughness: 0.9 }));
+  end.position.z = 0.276; log.add(end);
+  log.rotation.y = 0.5;   // turn it a little so the cut end shows
+  INV_DEFS.wood.icon = makeIcon(log, 0.35);
+}
+// Show the forest and stones the way the world says they are (chopped trees and taken stones gone)
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+function applyNature() {
+  if (!outside.treePts) return;
+  for (const p of outside.treePts) setTreeStanding(p, !((world.trees || {})[p.id] >= TREE_HITS));
+  outside.stones.forEach((s, i) => { s.taken = (world.rocks || []).includes(i); });
+}
+// Stones are detailed models, so only draw the ones near you (they'd be specks further away anyway)
+function updateStones() {
+  const c = mode === 'game' ? camera.position : me.pos;
+  for (const s of outside.stones) s.mesh.visible = !s.taken && Math.abs(s.x - c.x) < 35 && Math.abs(s.z - c.z) < 35;
+}
+function setTreeStanding(p, up) {
+  if (!!p.down === !up) return;
+  p.down = !up;
+  for (const [im, i, m] of p.refs) { im.setMatrixAt(i, up ? m : ZERO); im.instanceMatrix.needsUpdate = true; }
+  p.col.r = up ? 0.35 * p.s : 0.26 * p.s;   // a stump still blocks you, just less
+  let stump = outside.stumps.get(p.id);
+  if (!up && !stump) {
+    const v = outside.variants[p.v], rr = 0.26 * p.s;
+    stump = new THREE.Mesh(new THREE.CylinderGeometry(rr * 0.9, rr, 0.45, 12), v.tree.branchesMesh.material);
+    stump.position.set(p.x, terrainH(p.x, p.z) + 0.12, p.z); stump.rotation.y = p.rot; stump.castShadow = stump.receiveShadow = true;
+    scene.add(stump); outside.stumps.set(p.id, stump);
+  }
+  if (stump) stump.visible = !up;
+}
+// The tree tips over away from you with a crash, lies there a moment, then shrinks away
+function fellTree(p) {
+  const v = outside.variants[p.v], s = v.scale * p.s;
+  setTreeStanding(p, false);
+  const pivot = new THREE.Group(), inner = new THREE.Group();
+  pivot.position.set(p.x, terrainH(p.x, p.z) + 0.2, p.z); inner.rotation.y = p.rot; inner.scale.setScalar(s); inner.position.y = -0.3;
+  const b = new THREE.Mesh(v.tree.branchesMesh.geometry, v.tree.branchesMesh.material), l = new THREE.Mesh(v.tree.leavesMesh.geometry, v.leafMat);
+  b.castShadow = l.castShadow = true; inner.add(b, l); pivot.add(inner); scene.add(pivot);
+  const away = new THREE.Vector3(p.x - me.pos.x, 0, p.z - me.pos.z); if (away.lengthSq() < 1e-4) away.set(1, 0, 0); away.normalize();
+  outside.falling.push({ pivot, axis: new THREE.Vector3(0, 1, 0).cross(away).normalize(), t: 0, landed: false, near: Math.hypot(p.x - me.pos.x, p.z - me.pos.z) < 25 });
+}
+function updateFalling(dt) {
+  for (let i = outside.falling.length - 1; i >= 0; i--) {
+    const f = outside.falling[i]; f.t += dt;
+    const a = Math.min(1, f.t / 1.9); f.pivot.quaternion.setFromAxisAngle(f.axis, 1.5 * a * a);
+    if (a >= 1 && !f.landed) { f.landed = true; if (f.near) { sfx.play('boardFall'); sfx.play('thunk'); me.shake = Math.max(me.shake, 0.5); } }
+    if (f.t > 3.2) { const k = Math.max(0, 1 - (f.t - 3.2) / 1.2); f.pivot.scale.setScalar(k); }
+    if (f.t > 4.4) { scene.remove(f.pivot); outside.falling.splice(i, 1); }
+  }
+}
+// The standing tree you're aiming at with the axe, within reach (checks the trunk as an upright line)
+const aimDir = new THREE.Vector3();
+function aimedTree(reach = 2.6) {
+  if (!outside.treePts || !world.exitOpen) return null;
+  const o = camera.position; camera.getWorldDirection(aimDir);
+  const h2 = aimDir.x * aimDir.x + aimDir.z * aimDir.z; if (h2 < 1e-4) return null;
+  const gx = Math.floor(o.x / 4), gz = Math.floor(o.z / 4); let best = null, bestT = Infinity;
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (const c of outside.treeCols.get((gx + a) + ',' + (gz + b)) || []) {
+    if (!c.p || c.p.down) continue;
+    const t = ((c.x - o.x) * aimDir.x + (c.z - o.z) * aimDir.z) / h2; if (t <= 0 || t > reach) continue;
+    const dx = o.x + aimDir.x * t - c.x, dz = o.z + aimDir.z * t - c.z; if (Math.hypot(dx, dz) > c.r + 0.25) continue;
+    const y = o.y + aimDir.y * t - terrainH(c.x, c.z); if (y < -0.2 || y > 3.2) continue;
+    if (t < bestT) { bestT = t; best = c.p; }
+  }
+  return best;
+}
+// Health bar: shows on the tree you're chopping, and for a few seconds after a hit
+const treeBar = { p: null, t: 0 };
+function updateTreeBar(dt, aimed) {
+  treeBar.t = Math.max(0, treeBar.t - dt);
+  const p = aimed && (world.trees || {})[aimed.id] > 0 ? aimed : treeBar.t > 0 ? treeBar.p : null;
+  const show = !!p && !p.down && mode === 'game' && me.stage === 'free';
+  $('treeBar').classList.toggle('show', show);
+  if (show) $('treeBarFill').style.width = (100 * (1 - ((world.trees || {})[p.id] || 0) / TREE_HITS)) + '%';
+}
+function giveItem(id, n) {
+  if (n <= 0) return;
+  const got = addItem(id, n);
+  if (got < n) toast('Inventory full', 1800);
+  else toast(`+${n} ${INV_DEFS[id].name}`, 1100);
 }
 function mergeGeos(list) {
   const pos = [], nor = [], uvs = [], idx = []; let off = 0;
@@ -1490,35 +1619,22 @@ function houseColliders() {
   for (const d of houseDoors) if (d) out.push(d.t > 0.6 ? d.openCol : d.closedCol);
   return out;
 }
-// Objective list (outside): Find Shelter → Use Tab to open inventory → Gather Wood and Stone.
-// Each item appears once the one before it is done; done items stay with a green ✓.
-function showObjList(on) {
-  $('objList').classList.toggle('show', on); $('hud').classList.toggle('list', on);
-  for (const [id, shown, done] of [['objShelter', on, me.shelter], ['objInv', on && me.shelter, me.invOpened], ['objGather', on && me.gatherObj, false]]) {
-    $(id).classList.toggle('show', shown); $(id).classList.toggle('done', shown && done);
-  }
-}
-// A new objective slides into the list (only once, not every time a menu closes)
-function addObjective(id) {
-  const el = $(id); el.classList.add('show', 'new'); sfx.play('pickup');
-  setTimeout(() => el.classList.remove('new'), 600);
-}
-// Find Shelter: tick it off the first time you step inside a house
+// Find Shelter: tick it off the first time you step inside a house (the objective box plays the chime).
+// Tab opens the inventory from now on.
 function shelterFound() {
-  me.shelter = true; $('objShelter').classList.add('done');
-  sfx.play('chime'); toast('Shelter found'); saveGame();
-  // Next objective, and Tab now opens the inventory
-  setTimeout(() => { if (mode === 'game' && me.shelter) addObjective('objInv'); }, 1500);
+  me.shelter = true; toast('Shelter found'); saveGame();
 }
 
 // =====================================================================
 // Players
 // =====================================================================
-const world = { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false] };
+// trees: tree id -> hits taken (5 = chopped down); treeWood: tree id -> wood it gives (12–18); rocks: ids of loose stones picked up
+const freshWorld = () => ({ glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false], trees: {}, treeWood: {}, rocks: [] });
+const world = freshWorld();
 const me = {
   stage: 'menu', slot: 0, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0,
   baseYaw: 0, strap: 0, crouch: 0, bob: 0, onGround: true, vy: 0, equipped: -1, swing: -1, swingHit: false,
-  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, gatherObj: false, wakeT: 0, shake: 0,
+  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, gatherObj: false, gatherDone: false, inv: [], wakeT: 0, shake: 0,
 };
 const remotes = new Map();   // id -> avatar
 
@@ -1602,6 +1718,18 @@ function doAction(by, act) {          // host only
   if (act.a === 'cutters' && world.doorOpen && !world.cuttersOwner) { world.cuttersOwner = by; return { a: 'cutters', by }; }
   if (act.a === 'chain' && world.cuttersOwner === by && !world.chainCut) { world.chainCut = true; return { a: 'chain', by }; }
   if (act.a === 'exitOpen' && world.chainCut && !world.exitOpen) { world.exitOpen = true; return { a: 'exitOpen', by }; }
+  if (act.a === 'chop' && Number.isInteger(act.id) && act.id >= 0 && world.axeOwner === by) {
+    world.trees = world.trees || {}; world.treeWood = world.treeWood || {};
+    const hits = world.trees[act.id] || 0; if (hits >= TREE_HITS) return null;
+    const total = world.treeWood[act.id] || (world.treeWood[act.id] = 12 + Math.floor(Math.random() * 7));   // 12–18 wood
+    const h = hits + 1; world.trees[act.id] = h;
+    const wood = Math.floor(total * h / TREE_HITS) - Math.floor(total * hits / TREE_HITS);   // a little each hit, all of it by the last
+    return { a: 'chop', id: act.id, hits: h, wood, by, fell: h >= TREE_HITS };
+  }
+  if (act.a === 'rock' && Number.isInteger(act.i) && act.i >= 0) {
+    world.rocks = world.rocks || []; if (world.rocks.includes(act.i)) return null;
+    world.rocks.push(act.i); return { a: 'rock', i: act.i, by };
+  }
   if (act.a === 'house' && act.i >= 0 && act.i < HOUSES.length) { world.houses = world.houses || []; world.houses[act.i] = !world.houses[act.i]; return { a: 'house', i: act.i, open: world.houses[act.i], by }; }
   return null;
 }
@@ -1627,6 +1755,17 @@ function playFx(fx) {
     sfx.play('snap'); setTimeout(() => sfx.play('clank'), 250); exitDoor.fall = 0.01; if (fx.by === net.myId) me.shake = Math.max(me.shake, 0.5);
   }
   if (fx.a === 'exitOpen') openExitDoor();
+  if (fx.a === 'chop') {
+    const p = outside.treePts && outside.treePts[fx.id];
+    sfx.play('thunk');
+    if (p) { spawnChips(new THREE.Vector3(p.x, terrainH(p.x, p.z) + 1.0, p.z)); treeBar.p = p; treeBar.t = 3; }
+    if (fx.by === net.myId) { me.shake = Math.max(me.shake, 0.4); giveItem('wood', fx.wood); }
+    if (fx.fell && p) fellTree(p);
+  }
+  if (fx.a === 'rock') {
+    const s = outside.stones[fx.i]; if (s) { s.taken = true; s.mesh.visible = false; }
+    if (fx.by === net.myId) { sfx.play('pickup'); giveItem('stone', 1); }
+  }
   if (fx.a === 'house' && houseDoors[fx.i]) { houseDoors[fx.i].target = fx.open ? 1 : 0; sfx.play(fx.open ? 'door' : 'thunk'); }
 }
 function applyWorldInstant() {   // used when loading a save or joining mid-game
@@ -1639,6 +1778,7 @@ function applyWorldInstant() {   // used when loading a save or joining mid-game
   doorPivot.rotation.y = world.doorOpen ? 1.62 : 0; doorState.t = world.doorOpen ? 1 : 0; doorState.opening = false;
   if (cuttersInWorld) cuttersInWorld.visible = !world.cuttersOwner;
   applyHouseDoors();
+  applyNature();
   exitDoor.opening = false; exitDoor.t = world.exitOpen ? 1 : 0; exitDoor.fall = world.chainCut ? 1 : 0;
   exitDoor.left.rotation.y = world.exitOpen ? 1.45 : 0; exitDoor.right.rotation.y = world.exitOpen ? -1.45 : 0;
   exitDoor.chain.position.y = world.chainCut ? -0.85 : 0; exitDoor.chain.rotation.z = world.chainCut ? 0.3 : 0;
@@ -1823,6 +1963,7 @@ function pollPad(dt) {
 // =====================================================================
 function jump() { if (me.stage === 'free' && me.onGround && me.crouch < 0.5) { me.vy = 3.6; me.onGround = false; } }
 let hover = null;   // what you're looking at
+let hoverTree = null;   // the tree in axe reach you're looking at
 const ray = new THREE.Raycaster();
 function pressInteract() {
   if (me.stage !== 'free' || !hover) return;
@@ -1833,6 +1974,7 @@ function pressInteract() {
   if (hover === 'exit' && hasCutters() && !world.chainCut) requestAction({ a: 'chain' });
   else if (hover === 'exit' && world.chainCut && !world.exitOpen) requestAction({ a: 'exitOpen' });
   if (hover.startsWith('house')) requestAction({ a: 'house', i: +hover.slice(5) });
+  if (hover.startsWith('rock')) { if (invRoom('stone') > 0) requestAction({ a: 'rock', i: +hover.slice(4) }); else toast('Inventory full', 1800); }
 }
 function useItem() {
   if (me.stage !== 'free' || me.equipped !== 0 || !hasAxe() || me.swing >= 0) return;
@@ -1847,8 +1989,10 @@ function swingHitCheck() {
   const door = ray.intersectObject(doorHit, false)[0];
   if (door && live.length) {
     const best = live.reduce((a, b) => (Math.abs(b.position.y - door.point.y) < Math.abs(a.position.y - door.point.y) ? b : a));
-    requestAction({ a: 'hit', i: best.userData.board });
+    requestAction({ a: 'hit', i: best.userData.board }); return;
   }
+  const tree = aimedTree();
+  if (tree) requestAction({ a: 'chop', id: tree.id });
 }
 
 // =====================================================================
@@ -1866,8 +2010,7 @@ const ui = {
     if (this.stack.length) {
       // Closing the inventory the first time gives the next objective
       if (this.stack[this.stack.length - 1] === 'inv' && !me.gatherObj) {
-        me.gatherObj = true; saveGame();
-        setTimeout(() => { if (mode === 'game' && me.gatherObj) addObjective('objGather'); }, 400);
+        me.gatherObj = true; checkGather(); saveGame();
       }
       this.stack.pop(); this.render(); if (mode === 'game' && !this.stack.length) lockPointer(); return; }
     if (mode === 'game') this.open('pause');
@@ -1889,34 +2032,52 @@ const ui = {
 };
 
 // Inventory (Tab). Locked until Find Shelter is done. Hotbar items show only in the hotbar row, never in the grid.
-const INV_ROWS = 5, INV_COLS = 5;
+const INV_ROWS = 5, INV_COLS = 5, STACK_MAX = 100;
+const INV_DEFS = { stone: { name: 'Stone', icon: '' }, wood: { name: 'Wood', icon: '' } };   // icons are drawn once the forest has loaded
+const GATHER = { wood: 15, stone: 5 };   // "Gather Wood and Stone" is done at this much of each
+const emptyInv = () => Array(INV_ROWS * INV_COLS).fill(null);
+const invCount = (id) => me.inv.reduce((n, s) => n + (s && s.id === id ? s.n : 0), 0);
+const invRoom = (id) => me.inv.reduce((n, s) => n + (!s ? STACK_MAX : s.id === id ? STACK_MAX - s.n : 0), 0);
+// Adds up to n of an item (topping up stacks first, then empty boxes). Returns how many fit.
+function addItem(id, n) {
+  let left = n;
+  for (const s of me.inv) if (left && s && s.id === id && s.n < STACK_MAX) { const k = Math.min(left, STACK_MAX - s.n); s.n += k; left -= k; }
+  for (let i = 0; i < me.inv.length && left; i++) if (!me.inv[i]) { const k = Math.min(left, STACK_MAX); me.inv[i] = { id, n: k }; left -= k; }
+  checkGather();
+  if (ui.stack[ui.stack.length - 1] === 'inv') renderInventory();
+  saveGame();
+  return n - left;
+}
+function checkGather() { if (!me.gatherDone && me.gatherObj && invCount('wood') >= GATHER.wood && invCount('stone') >= GATHER.stone) me.gatherDone = true; }
 let invTab = 'inventory';
 function toggleInventory() {
   const top = ui.stack[ui.stack.length - 1];
   if (top === 'inv') { ui.back(); return; }
   if (ui.stack.length || me.stage !== 'free' || !me.shelter) return;
   ui.open('inv');
-  if (!me.invOpened) { me.invOpened = true; $('objInv').classList.add('done'); sfx.play('chime'); saveGame(); }
+  if (!me.invOpened) { me.invOpened = true; saveGame(); }   // ticked off (✓ + chime) when the inventory closes
 }
 function renderInventory() {
   for (const b of $('invTabs').children) b.classList.toggle('on', b.dataset.tab === invTab);
   // All four pages are stacked in the same spot and only the open one is visible,
   // so the window is always the size of the Inventory page whichever topic is open.
-  const slot = (i, bar) => {
-    const it = bar ? ITEMS[i] : null, has = !!(it && it.has() && it.icon);
-    return `<div class="slot${bar && me.equipped === i ? ' on' : ''}"${bar ? ` data-bar="${i}"` : ''}>${bar ? `<span class="n">${i + 1}</span>` : ''}${has ? `<img src="${it.icon}" alt="${it.name}">` : ''}</div>`;
-  };
-  let grid = ''; for (let i = 0; i < INV_ROWS * INV_COLS; i++) grid += slot(i, false);
-  let bar = ''; for (let i = 0; i < SLOT_COUNT; i++) bar += slot(i, true);
-  // Same list as the objective box: outside it grows one item at a time, before that it's the current step
-  const objs = !me.chapterDone ? [[objective().replace(/\s*\[[^\]]*\]$/, ''), false]] : [['Find Shelter', me.shelter]];
-  if (me.chapterDone && me.shelter) objs.push(['Use Tab to open inventory', me.invOpened]);
-  if (me.chapterDone && me.gatherObj) objs.push(['Gather Wood and Stone', false]);
+  const pic = (icon, name) => (icon ? `<img src="${icon}" alt="${name}">` : `<span class="nm">${name}</span>`);
+  let grid = '';
+  for (const s of me.inv) grid += `<div class="slot">${s ? pic(INV_DEFS[s.id].icon, INV_DEFS[s.id].name) + `<span class="cnt">${s.n}</span>` : ''}</div>`;
+  let bar = '';
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    const it = ITEMS[i], has = !!(it && it.has() && it.icon);
+    bar += `<div class="slot${me.equipped === i ? ' on' : ''}" data-bar="${i}"><span class="n">${i + 1}</span>${has ? pic(it.icon, it.name) : ''}</div>`;
+  }
+  // Current objective, then every finished one under "Chapter 1"
+  const done = CHAPTER1.filter(([, ok]) => ok()).map(([t]) => t);
+  const cur = objective().replace(/\s+\[\w+\]$/, '');
   const pages = {
     inventory: `<div class="label">Inventory</div><div class="grid">${grid}</div>
       <div id="invBar"><div class="label">Hotbar</div><div class="grid">${bar}</div></div>`,
     crafting: `<div class="label">Crafting</div><div class="invText muted">Nothing here yet.</div>`,
-    objectives: `<div class="label">Objective</div><ul class="invList">${objs.map(([t, d]) => `<li class="${d ? 'done' : ''}">${d ? '✓' : '☐'} ${t}</li>`).join('')}</ul>`,
+    objectives: `<div class="label">Current</div><div class="invText" style="margin-bottom:14px">${cur}</div>`
+      + `<div class="label">Chapter 1</div>` + (done.length ? `<ul class="invList">${done.map((t) => `<li class="done">✓ ${t}</li>`).join('')}</ul>` : `<div class="invText muted">Nothing finished yet.</div>`),
     notes: `<div class="label">Notes</div><div class="invText muted">Nothing here yet.</div>`,
   };
   $('invBody').innerHTML = Object.entries(pages).map(([k, html]) => `<div class="invPage${k === invTab ? ' on' : ''}" data-page="${k}">${html}</div>`).join('');
@@ -2116,7 +2277,7 @@ const net = {
   startGame(fresh) {
     if (fresh) { save.game = null; persist(); }
     const g = save.game;
-    Object.assign(world, { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false] }, g ? g.world : {});
+    Object.assign(world, freshWorld(), g ? g.world : {});
     // Saves from before this update opened the exit door by itself when the chain was cut
     if (g && g.world.chainCut && g.world.exitOpen === undefined) world.exitOpen = true;
     // Only the host's own items carry over from a save
@@ -2172,15 +2333,15 @@ function startLocal({ fresh, saved }) {
   const mine = net.players.get(net.myId); me.slot = mine ? mine.slot : 0;
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
-  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; outside.f = 0;
-  $('banner').style.opacity = 0; showObjList(false);
+  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.inv = emptyInv(); outside.f = 0;
+  $('banner').style.opacity = 0; lastObj = '';
   if (saved && saved.me && saved.me.stage === 'free') {
-    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj;
+    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone;
+    if (Array.isArray(s.inv)) me.inv = emptyInv().map((_, i) => (s.inv[i] && INV_DEFS[s.inv[i].id] && s.inv[i].n > 0 ? { id: s.inv[i].id, n: s.inv[i].n } : null));
     me.pos.y = (insideBuilding(s.pos[0], s.pos[2]) ? 0 : terrainH(s.pos[0], s.pos[2])) + EYE;
     beds[me.slot].straps.forEach((st) => (st.visible = false));
     if (ITEMS[s.equipped] && ITEMS[s.equipped].has()) me.equipped = s.equipped;
     refreshHotbar(false);
-    if (me.chapterDone) showObjList(true);
     toast('Welcome back');
   } else {
     const p = lyingPose(me.slot); me.stage = 'strapped'; me.pos.set(p.x, p.y, p.z); me.yaw = me.baseYaw = p.yaw; me.pitch = p.pitch;
@@ -2207,7 +2368,7 @@ function endLocal() {
 // Only the look changes: the real world state is kept and comes back on Continue.
 function showFreshRoom() {
   const real = { ...world, boards: [...world.boards], houses: [...(world.houses || [])] };
-  Object.assign(world, { glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: HOUSES.map(() => false) });
+  Object.assign(world, freshWorld());
   applyWorldInstant();
   Object.assign(world, real);
   for (const s of shards) scene.remove(s.m);
@@ -2220,7 +2381,7 @@ function saveGame() {
   const pose = me.stage === 'waking' ? standPose(me.slot) : null;
   save.game = {
     world: { ...world, boards: [...world.boards] },
-    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj },
+    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, inv: me.inv },
   };
   persist();
 }
@@ -2234,7 +2395,13 @@ let lastObj = '';
 function objective() {
   if (me.stage === 'strapped') return 'Break free from the straps';
   if (me.stage === 'waking') return 'Break free from the straps';
-  if (world.exitOpen) return !me.chapterDone ? 'Go outside' : me.gatherObj ? 'Gather Wood and Stone' : me.shelter ? 'Use Tab to open inventory' : 'Find Shelter';
+  if (world.exitOpen) {
+    if (!me.chapterDone) return 'Go outside';
+    if (!me.shelter) return 'Find Shelter';
+    if (!me.gatherObj) return 'Use Tab to open inventory';
+    if (!me.gatherDone) return `Gather Wood and Stone (Wood ${Math.min(invCount('wood'), GATHER.wood)}/${GATHER.wood} · Stone ${Math.min(invCount('stone'), GATHER.stone)}/${GATHER.stone})`;
+    return 'More coming soon';
+  }
   if (world.chainCut) return 'Open the door  [F]';
   if (world.doorOpen) {
     if (hasCutters()) return 'Cut the chain on the exit door  [F]';
@@ -2247,18 +2414,44 @@ function objective() {
   if (world.glass) return `Chop the boards off the door (${4 - left}/4)`;
   return me.seenDoor ? 'Break open the emergency box' : 'Find a way out';
 }
+// One objective at a time: a finished one shows a green ✓ for a moment, then the next takes its place
+// Progress in brackets, like "(Wood 4/15 · Stone 2/5)", goes on its own smaller line
+function setObjText(t) {
+  const m = t.match(/^(.*?)\s*\((.*)\)$/), el = $('objText');
+  el.textContent = m ? m[1] : t;
+  if (m) { const sub = document.createElement('span'); sub.className = 'sub'; sub.textContent = m[2]; el.appendChild(sub); }
+  $('objItem').classList.toggle('soon', t === 'More coming soon');
+}
 function updateObjective() {
   const t = objective(); if (t === lastObj) return;
-  const el = $('objText');
-  // Outside, the objective list shows the steps (with its own chimes), so the single line stays quiet
-  if ($('hud').classList.contains('list')) { el.textContent = t; lastObj = t; return; }
+  const item = $('objItem');
   const changedStep = lastObj && lastObj.split(' (')[0] !== t.split(' (')[0];
   if (changedStep) {
-    el.textContent = '✓ ' + lastObj.replace(/\s+\[\w+\]$/, ''); el.classList.add('done'); sfx.play('chime');
-    const next = t; lastObj = t;
-    setTimeout(() => { el.style.opacity = 0; setTimeout(() => { el.classList.remove('done'); el.textContent = objective(); el.style.opacity = 1; }, 400); }, 1100);
-  } else { el.textContent = t; lastObj = t; }
+    setObjText(lastObj.replace(/\s*\(.*\)$/, '').replace(/\s+\[\w+\]$/, '')); item.classList.add('done'); sfx.play('chime');
+    lastObj = t;
+    setTimeout(() => { item.style.opacity = 0; setTimeout(() => {
+      item.classList.remove('done'); setObjText(objective()); item.style.opacity = 1;
+      item.classList.remove('new'); void item.offsetWidth; item.classList.add('new');
+    }, 400); }, 1100);
+  } else {
+    if (!item.classList.contains('done')) setObjText(t);   // e.g. a count went up; don't cut a ✓ flash short
+    lastObj = t;
+  }
 }
+// Chapter 1 objectives in order, each with how to tell it's done (works for old saves too)
+const CHAPTER1 = [
+  ['Break free from the straps', () => me.stage === 'free'],
+  ['Break open the emergency box', () => world.glass],
+  ['Chop the boards off the door', () => world.boards.every((b) => b === 0)],
+  ['Open the door', () => world.doorOpen],
+  ['Find something to cut the chain', () => !!world.cuttersOwner],
+  ['Cut the chain on the exit door', () => world.chainCut],
+  ['Open the exit door', () => world.exitOpen],
+  ['Go outside', () => me.chapterDone],
+  ['Find Shelter', () => me.shelter],
+  ['Use Tab to open inventory', () => me.gatherObj],
+  ['Gather Wood and Stone', () => me.gatherDone],
+];
 
 // =====================================================================
 // Movement & collision
@@ -2357,7 +2550,6 @@ function updatePlayer(dt, pad) {
   // Chapter complete
   if (world.exitOpen && !me.chapterDone && me.pos.z < BLD.z0 - 1.2) {
     me.chapterDone = true; sfx.play('chime'); $('banner').style.opacity = 1; setTimeout(() => ($('banner').style.opacity = 0), 5200); saveGame();
-    setTimeout(() => { if (mode === 'game' && me.chapterDone) { showObjList(true); sfx.play('pickup'); } }, 1500);
     setTimeout(() => subtitle('Fresh air… The town should be down that road.', 3600), 1500);
   }
   if (me.chapterDone && !me.shelter && houseAt(me.pos.x, me.pos.z) >= 0) shelterFound();
@@ -2439,6 +2631,9 @@ function updateHover() {
       }
     } else if (hover && hover.startsWith('jam')) {
       prompt = '<span class="key">F</span> Try the door';
+    } else if (hover && hover.startsWith('rock')) {
+      if ((world.rocks || []).includes(+hover.slice(4))) hover = null;
+      else prompt = '<span class="key">F</span> Pick up stone';
     } else if (hover === 'door') {
       if (!me.seenDoor && !world.doorOpen) me.seenDoor = true;
       if (world.doorOpen) hover = null;
@@ -2448,8 +2643,11 @@ function updateHover() {
       else { prompt = "It's boarded up. I need something to break the boards."; info = true; }
     }
   }
+  // A tree in reach, when holding the axe: hold click to chop
+  hoverTree = me.stage === 'free' && !hover && me.equipped === 0 && hasAxe() ? aimedTree() : null;
+  if (hoverTree) prompt = '<span class="key">Hold Click</span> Chop the tree';
   const el = $('prompt'); if (el.innerHTML !== prompt) el.innerHTML = prompt; el.classList.toggle('info', info);
-  $('crosshair').classList.toggle('hot', !!hover && !info);
+  $('crosshair').classList.toggle('hot', (!!hover || !!hoverTree) && !info);
   $('crosshair').style.display = me.stage === 'free' ? '' : 'none';
 }
 
@@ -2480,10 +2678,11 @@ function tick(dt) {
     updatePlayer(dt, pad);
     updateCamera(dt, time);
     updateHover();
+    updateTreeBar(dt, hoverTree);
     updateObjective();
     saveT += dt; if (saveT > 3) { saveT = 0; saveGame(); }
   } else if (mode === 'home') updateMenuCamera(time);
-  updateAvatars(dt); updateShards(dt); updateBoards(dt); updateDoor(dt); updateStraps(dt); updateExitDoor(dt); updateOutdoors(dt, time); updateHouseDoors(dt);
+  updateAvatars(dt); updateShards(dt); updateBoards(dt); updateDoor(dt); updateStraps(dt); updateExitDoor(dt); updateOutdoors(dt, time); updateHouseDoors(dt); updateFalling(dt); updateStones();
   net.tick(dt);
   // Flickering light
   if (flickerPanel) {
@@ -2560,7 +2759,7 @@ boot();
 // Test hooks (read-only helpers for automated checks)
 window.__game = { me, world, net, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
   step(sec) { for (let i = 0; i < sec * 60; i++) tick(1 / 60); },
-  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, HOUSES, houseDoors, houseAt, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes };
+  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, HOUSES, houseDoors, houseAt, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes, aimedTree, invCount, INV_DEFS, CHAPTER1, mouse };
 </script>
 </body>
 </html>
