@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-27.5';
+window.GAME_VERSION = '2026-10-27.6';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -1009,6 +1009,7 @@ async function loadHallwayProps() {
     models.cutters = fit(cutters, 0.7);
     cuttersInWorld = models.cutters.clone(); cuttersInWorld.position.set(3.75, 0.005, -30.3); cuttersInWorld.rotation.y = 0.7; cuttersInWorld.visible = !world.cuttersOwner; scene.add(cuttersInWorld);
     const v = models.cutters.clone(); v.traverse((o) => { if (o.isMesh) o.castShadow = false; }); v.rotation.set(-1.25, 0.25, 0.15); v.position.set(0, -0.05, 0); viewCutters.add(v);
+    cutAnim.tool = v; rigCutters(v);
     INV_DEFS.cutters.icon = makeIcon(models.cutters, 0.75); refreshHotbar(false);
   }
   const put = (m, x, y, z, ry = 0, extra) => { if (!m) return null; const c = m.clone(); c.position.set(x, y, z); c.rotation.y = ry; if (extra) extra(c); scene.add(c); return c; };
@@ -1061,7 +1062,7 @@ const ROAD_Z = -58, ROAD_W = 7;
 const OUT = { x0: -50, x1: 95, z0: -100, z1: 30 };                              // where players can walk outside
 const exitDoor = { left: null, right: null, chain: null, t: 0, opening: false, fall: 0 };
 let cuttersInWorld = null;
-const outside = { f: 0, dir: null, hemi: null, doorLight: null, chunks: [], trees: [], treeCols: new Map(), ready: false, warnT: 0, crowT: 20 };
+const outside = { boulders: [], f: 0, dir: null, hemi: null, doorLight: null, chunks: [], trees: [], treeCols: new Map(), ready: false, warnT: 0, crowT: 20 };
 // Open exit doors: thin blockers where the door leaves end up
 const EXIT_LEAVES = [{ minX: -1.24, maxX: -1.06, minZ: HEND - 1.25, maxZ: HEND - 0.02 }, { minX: 1.06, maxX: 1.24, minZ: HEND - 1.25, maxZ: HEND - 0.02 }];
 ZONES.push({ x0: -1.15, x1: 1.15, z0: HEND - 0.9, z1: HEND + 0.8, exit: true });
@@ -1329,7 +1330,7 @@ async function buildForest() {
   // Boulders: kept out of the house yards and driveways, and solid (they block you like tree trunks)
   const r = scatter(rock, 70, 1.4, { x0: -60, x1: 100, z0: -110, z1: 40 },
     (x, z) => houseLotDist(x, z) > 2 && (!clear(x, z) || (Math.abs(z - ROAD_Z) > 7 && !insideBuilding(x, z) && Math.hypot(x, z - BLD.z0) > 12)),
-    (x, z, w) => { const gk = Math.floor(x / 4) + ',' + Math.floor(z / 4); if (!outside.treeCols.has(gk)) outside.treeCols.set(gk, []); outside.treeCols.get(gk).push({ x, z, r: w * 0.42 }); }, 0.12);
+    (x, z, w) => { const gk = Math.floor(x / 4) + ',' + Math.floor(z / 4); if (!outside.treeCols.has(gk)) outside.treeCols.set(gk, []); outside.treeCols.get(gk).push({ x, z, r: w * 0.42 }); outside.boulders.push({ x, z, r: w * 0.42, y: terrainH(x, z) + w * 0.25 }); }, 0.12);
   if (r) r.castShadow = true;
   outside.treePts = pts; outside.variants = variants;
   buildLooseStones(stone);
@@ -1456,13 +1457,12 @@ function buildFire(i) {
   group.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; }); scene.add(group);
   const hit = new THREE.Mesh(new THREE.SphereGeometry(0.4, 8, 6), new THREE.MeshBasicMaterial()); hit.visible = false;
   hit.position.set(c.x, groundY(c.x, c.z) + 0.2, c.z); scene.add(hit); interactables.push({ mesh: hit, id: 'fire' + i });
-  fires[i] = { group, hit, light: null, flames: [], lit: false };
+  fires[i] = { group, hit, flames: [], lit: false };
 }
 function lightFire(i) {
   const f = fires[i], c = world.campfires[i]; if (!f || f.lit) return;
   f.lit = true;
   const y = groundY(c.x, c.z);
-  f.light = new THREE.PointLight(0xff8a3a, 3.2, 8, 2); f.light.position.set(c.x, y + 0.45, c.z); scene.add(f.light);
   for (let k = 0; k < 9; k++) {
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: flameTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, color: 0xffffff }));
     sp.userData.phase = k / 9; sp.userData.dx = rand(-0.1, 0.1); sp.userData.dz = rand(-0.1, 0.1); scene.add(sp); f.flames.push(sp);
@@ -1481,23 +1481,37 @@ function applyFires() {
 }
 function removeFire(i) {
   const f = fires[i]; if (!f) return;
-  scene.remove(f.group, f.hit); if (f.light) scene.remove(f.light); for (const s of f.flames) scene.remove(s);
+  scene.remove(f.group, f.hit); for (const s of f.flames) scene.remove(s);
   const k = interactables.findIndex((it) => it.mesh === f.hit); if (k >= 0) interactables.splice(k, 1);
   fires[i] = null;
 }
-// Flames rise and fade in a loop, the glow flickers, and nearby fires crackle
+// Campfire glow: a fixed set of lights that go to the fires nearest you. Adding a light to the scene makes every
+// material rebuild (a big stutter) and each light costs every pixel, so the count never changes.
+const FIRE_LIGHTS = 3;
+const fireLights = Array.from({ length: FIRE_LIGHTS }, () => { const l = new THREE.PointLight(0xff8a3a, 0, 8, 2); scene.add(l); return l; });
+const fireByDist = [];
+// Flames rise and fade in a loop, the glow flickers, and the nearest fire crackles
 function updateFires(dt, time) {
+  const cam = mode === 'game' ? camera.position : me.pos;
+  fireByDist.length = 0;
+  for (let i = 0; i < fires.length; i++) { const c = world.campfires[i]; if (fires[i] && fires[i].lit && c) fireByDist.push([Math.hypot(c.x - cam.x, c.z - cam.z), i]); }
+  fireByDist.sort((a, b) => a[0] - b[0]);
+  fireLights.forEach((l, k) => {
+    const e = fireByDist[k]; if (!e || e[0] > 40) { l.intensity = 0; return; }
+    const c = world.campfires[e[1]]; l.position.set(c.x, groundY(c.x, c.z) + 0.45, c.z);
+    l.intensity = 3.2 + Math.sin(time * 11.3 + e[1]) * 0.35 + Math.sin(time * 23.7) * 0.25 + rand(-0.15, 0.15);
+  });
+  if (fireByDist[0] && mode === 'game' && fireByDist[0][0] < 12 && Math.random() < dt * 5) sfx.play('crackle', Math.max(0.1, 1 - fireByDist[0][0] / 12));
   for (let i = 0; i < fires.length; i++) {
     const f = fires[i], c = world.campfires[i]; if (!f || !f.lit || !c) continue;
+    const far = Math.abs(c.x - cam.x) > 60 || Math.abs(c.z - cam.z) > 60;   // too far to see: don't draw or move its flames
     const y = groundY(c.x, c.z);
     for (const s of f.flames) {
+      s.visible = !far; if (far) continue;
       const u = s.userData; u.phase = (u.phase + dt * 0.9) % 1; const p = u.phase;
       s.position.set(c.x + u.dx * (1 - p), y + 0.2 + p * 0.65, c.z + u.dz * (1 - p));
       const k = (1 - p * 0.8) * (0.85 + Math.sin(time * 13 + u.dx * 90) * 0.15); s.scale.set(0.6 * k, 0.9 * k, 1); s.material.opacity = Math.min(1, (1 - p) * 1.6);
     }
-    f.light.intensity = 3.2 + Math.sin(time * 11.3 + i) * 0.35 + Math.sin(time * 23.7) * 0.25 + rand(-0.15, 0.15);
-    const d = Math.hypot(c.x - me.pos.x, c.z - me.pos.z);
-    if (mode === 'game' && d < 12 && Math.random() < dt * 5) sfx.play('crackle', Math.max(0.1, 1 - d / 12));
   }
 }
 const fireColliders = () => (world.campfires || []).map((c) => ({ minX: c.x - FIRE_HALF * 0.7, maxX: c.x + FIRE_HALF * 0.7, minZ: c.z - FIRE_HALF * 0.7, maxZ: c.z + FIRE_HALF * 0.7 }));
@@ -1674,11 +1688,13 @@ function treeCollide(p) {
 // Houses along the road (enterable; walking into one finds shelter)
 // =====================================================================
 // side 1 = hospital side of the road (front faces the road, -z); side -1 = across the road (front faces +z)
+const HOUSES_REMOVED = [2, 4];   // the far one on the hospital side and the one straight across from the hospital
 const HOUSE_W = 9, HOUSE_D = 8, HOUSE_H = 2.7, WALL_T = 0.18;
 const HOUSES = [
   { x: -34, side: 1, look: 0 }, { x: 34, side: 1, look: 1 }, { x: 60, side: 1, look: 2 },
   { x: -20, side: -1, look: 1 }, { x: 8, side: -1, look: 2 }, { x: 40, side: -1, look: 0 },
-].map((h, i) => ({ ...h, i, z: ROAD_Z + h.side * (9 + HOUSE_D / 2) }));
+].map((h, i) => ({ ...h, i, z: ROAD_Z + h.side * (9 + HOUSE_D / 2) }))
+  .filter((h) => !HOUSES_REMOVED.includes(h.i));   // user: too many houses (2026-10-27). Each house keeps its number (h.i) so old saves line up.
 const houseRect = (h, m = 0) => ({ x0: h.x - HOUSE_W / 2 - m, x1: h.x + HOUSE_W / 2 + m, z0: h.z - HOUSE_D / 2 - m, z1: h.z + HOUSE_D / 2 + m });
 // Which house (if any) a point is inside
 function houseAt(x, z) {
@@ -1773,7 +1789,7 @@ function buildHouses() {
     const step = new THREE.Mesh(new THREE.BoxGeometry(2, 0.1, 1.1), stepMat); step.position.set(0, 0.05, -D / 2 - 0.55); step.receiveShadow = true; g.add(step);
     const fzW = h.z - s * (D / 2 + 1.1), len = Math.abs(fzW - (ROAD_Z + s * ROAD_W / 2));
     const dw = new THREE.Mesh(meterUV(new THREE.PlaneGeometry(2.2, len), 2.2, len), gravel); dw.rotation.x = -Math.PI / 2; dw.position.set(h.x, 0.02, (fzW + ROAD_Z + s * ROAD_W / 2) / 2); dw.receiveShadow = true; scene.add(dw);
-    // Door on a hinge; opens inward
+    // Door on a hinge; swings away from whoever opens it (in from outside, out from inside)
     const pivot = new THREE.Group(); pivot.position.set(-DW / 2, 0, -D / 2 + T / 2); g.add(pivot);
     const slab = new THREE.Mesh(new THREE.BoxGeometry(DW - 0.04, DH - 0.03, 0.05), new THREE.MeshStandardMaterial({ color: look.door, roughness: 0.6 }));
     slab.position.set((DW - 0.04) / 2, (DH - 0.03) / 2, 0); slab.castShadow = slab.receiveShadow = true; pivot.add(slab);
@@ -1782,7 +1798,7 @@ function buildHouses() {
     interactables.push({ mesh: hit, id: 'house' + h.i });
     interactables.push({ mesh: slab, id: 'house' + h.i });   // the door itself works too, wherever it has swung to, from either side
     const L = (x0, x1, z0, z1) => ({ minX: Math.min(h.x + s * x0, h.x + s * x1), maxX: Math.max(h.x + s * x0, h.x + s * x1), minZ: Math.min(h.z + s * z0, h.z + s * z1), maxZ: Math.max(h.z + s * z0, h.z + s * z1) });
-    houseDoors[h.i] = { pivot, t: 0, target: 0, closedCol: L(-DW / 2, DW / 2, -D / 2, -D / 2 + T), openCol: L(-DW / 2 - 0.05, -DW / 2 + 0.08, -D / 2 + T, -D / 2 + T + DW) };
+    houseDoors[h.i] = { pivot, t: 0, target: 0, closedCol: L(-DW / 2, DW / 2, -D / 2, -D / 2 + T), openCol: L(-DW / 2 - 0.05, -DW / 2 + 0.08, -D / 2 + T, -D / 2 + T + DW), outCol: L(-DW / 2 - 0.05, -DW / 2 + 0.08, -D / 2 - DW, -D / 2) };
     h.group = g;
   }
 }
@@ -1869,6 +1885,8 @@ function foldedClothes(mat, w, d, folds) {
 }
 async function loadLoot() {
   const [pick, knife, torch, boots] = await Promise.all(['picke_dirty_01', 'fish_knife', 'small_plastic_torch', 'rubber_boots'].map(loadModel));
+  // The ones you hold (the model the way it was made, before it's laid down on the floor)
+  for (const [id, m, size] of [['pickaxe', pick, 0.62], ['knife', knife, 0.26], ['flashlight', torch, 0.2]]) if (m) addToolView(id, fit(m.clone(), size, { cast: false }));
   if (pick) lootModels.pickaxe = layFlat(pick, 0.85);
   if (knife) lootModels.knife = layFlat(knife, 0.3);
   if (torch) lootModels.flashlight = layFlat(torch, 0.24);
@@ -1897,7 +1915,7 @@ function applyLoot() {
   lootMeshes.length = 0;
   for (let i = interactables.length - 1; i >= 0; i--) if (interactables[i].id.startsWith('loot')) interactables.splice(i, 1);
   (world.loot || []).forEach((l, i) => {
-    const h = HOUSES[l.h], spot = LOOT_SPOTS[l.h % 3] && LOOT_SPOTS[l.h % 3][l.s], model = lootModels[l.id];
+    const h = HOUSES.find((x) => x.i === l.h), spot = LOOT_SPOTS[l.h % 3] && LOOT_SPOTS[l.h % 3][l.s], model = lootModels[l.id];
     if (!h || !h.group || !spot || !model || l.taken) return;
     const g = new THREE.Group(); g.position.set(spot[0], (spot[2] || 0.025) + 0.002, spot[1]);   // resting on the floor (0.025) or the mattress g.rotation.y = l.ry || 0;
     g.add(model.clone());
@@ -1910,7 +1928,8 @@ function applyLoot() {
 }
 const lootHitMat = new THREE.MeshBasicMaterial();
 
-function applyHouseDoors() { houseDoors.forEach((d, i) => { if (d) { d.t = d.target = world.houses && world.houses[i] ? 1 : 0; d.pivot.rotation.y = -1.45 * d.t; } }); }
+const doorDir = (v) => (v === -1 ? -1 : v ? 1 : 0);   // older saves stored true for open (= swung in)
+function applyHouseDoors() { houseDoors.forEach((d, i) => { if (d) { d.t = d.target = doorDir(world.houses && world.houses[i]); d.pivot.rotation.y = -1.45 * d.t; } }); }
 function updateHouseDoors(dt) {
   for (const d of houseDoors) {
     if (!d) continue;
@@ -1920,7 +1939,7 @@ function updateHouseDoors(dt) {
 }
 function houseColliders() {
   const out = [];
-  for (const d of houseDoors) if (d) out.push(d.t > 0.6 ? d.openCol : d.closedCol);
+  for (const d of houseDoors) if (d) out.push(d.t > 0.6 ? d.openCol : d.t < -0.6 ? d.outCol : d.closedCol);
   return out;
 }
 // Find Shelter: tick it off the first time you step inside a house (the objective box plays the chime).
@@ -2050,7 +2069,8 @@ function doAction(by, act) {          // host only
   }
   if (act.a === 'rainClock' && !world.rainClock) { world.rainClock = true; world.rainT = 0; return { a: 'rainClock', by }; }
   if (act.a === 'rain' && world.rainClock && !world.rain) { world.rain = true; return { a: 'rain', by }; }
-  if (act.a === 'house' && act.i >= 0 && act.i < HOUSES.length) { world.houses = world.houses || []; world.houses[act.i] = !world.houses[act.i]; return { a: 'house', i: act.i, open: world.houses[act.i], by }; }
+  // House doors: 0 shut, 1 swung in, -1 swung out (they swing away from whoever opens them)
+  if (act.a === 'house' && HOUSES.some((h) => h.i === act.i)) { world.houses = world.houses || []; world.houses[act.i] = world.houses[act.i] ? 0 : act.dir === -1 ? -1 : 1; return { a: 'house', i: act.i, open: world.houses[act.i], by }; }
   return null;
 }
 function requestAction(act) {
@@ -2098,7 +2118,7 @@ function playFx(fx) {
     if (l && fx.by === net.myId) { sfx.play('pickup'); giveItem(l.id, 1); if (!me.supplies) { me.supplies = true; saveGame(); } }
   }
   if (fx.a === 'rain') sfx.play('thunder');
-  if (fx.a === 'house' && houseDoors[fx.i]) { houseDoors[fx.i].target = fx.open ? 1 : 0; sfx.play(fx.open ? 'door' : 'thunk'); }
+  if (fx.a === 'house' && houseDoors[fx.i]) { houseDoors[fx.i].target = doorDir(fx.open); sfx.play(fx.open ? 'door' : 'thunk'); }
 }
 function applyWorldInstant() {   // used when loading a save or joining mid-game
   glassMesh.visible = !world.glass; emergencyGlow.visible = !world.glass; if (axeInBox) axeInBox.visible = !world.glass;
@@ -2183,6 +2203,127 @@ function makeIcon(model, rotZ = -0.7) {
   r.render(s, cam); const url = r.domElement.toDataURL(); r.dispose(); r.forceContextLoss(); return url;
 }
 const viewCutters = new THREE.Group(); camera.add(viewCutters); viewCutters.visible = false; viewCutters.position.set(0.36, -0.36, -0.6);
+
+// Tools found in the houses, in your hand: the pickaxe mines stone from boulders, the knife slashes (fast),
+// the flashlight lights the way (click turns it on and off).
+const HAND_TOOLS = ['pickaxe', 'knife', 'flashlight'];
+const SWING_TIME = { axe: 0.55, pickaxe: 0.62, knife: 0.3 };
+const viewTool = new THREE.Group(); camera.add(viewTool); viewTool.visible = false; viewTool.position.set(AXE_HOLD.x, AXE_HOLD.y, AXE_HOLD.z);
+const toolViews = {};
+// How each sits in your hand (turns measured on screen)
+const TOOL_HOLD = { pickaxe: [[0, -0.2, 0], [-0.3, Math.PI / 2 + 0.5, -0.2]], knife: [[-0.06, 0.1, 0], [-1.1, 0.2, 0.25]], flashlight: [[-0.05, 0.12, 0.02], [0.06, Math.PI, 0]] };
+function addToolView(id, model) {
+  const v = new THREE.Group(); v.add(model); const [pos, rot] = TOOL_HOLD[id];
+  v.position.set(...pos); v.rotation.set(...rot); v.visible = false; viewTool.add(v); toolViews[id] = v;
+}
+// Flashlight beam: always in the scene (adding a light later would stutter), dark until you hold the flashlight
+const torchBeam = new THREE.SpotLight(0xfff0d8, 0, 34, 0.42, 0.55, 1.2);
+torchBeam.position.set(0.18, -0.16, -0.3); camera.add(torchBeam); torchBeam.target.position.set(0.05, -0.1, -6); camera.add(torchBeam.target);
+let torchOn = true;
+function updateToolView() {
+  const id = held();
+  viewTool.visible = HAND_TOOLS.includes(id) && !cutAnim.on;
+  for (const k in toolViews) toolViews[k].visible = k === id;
+  torchBeam.intensity = id === 'flashlight' && torchOn && !cutAnim.on ? 30 : 0;
+}
+// The boulder you're aiming at (within pickaxe reach)
+function aimedBoulder(reach = 2.6) {
+  if (!outside.boulders.length) return null;
+  const o = camera.position; camera.getWorldDirection(aimDir); let best = null, bestT = reach;
+  for (const b of outside.boulders) {
+    if (Math.abs(b.x - o.x) > 6 || Math.abs(b.z - o.z) > 6) continue;
+    const t = (b.x - o.x) * aimDir.x + (b.y - o.y) * aimDir.y + (b.z - o.z) * aimDir.z; if (t < 0 || t > bestT) continue;
+    const dx = o.x + aimDir.x * t - b.x, dy = o.y + aimDir.y * t - b.y, dz = o.z + aimDir.z * t - b.z;
+    if (dx * dx + dy * dy + dz * dz < b.r * b.r * 1.3) { best = b; bestT = t; }
+  }
+  return best;
+}
+function mineBoulder(b) {
+  spawnChips(new THREE.Vector3(b.x, b.y + 0.2, b.z).lerp(camera.position, 0.35));
+  sfx.play('clank'); me.shake = Math.max(me.shake, 0.35);
+  giveItem('stone', 1);
+}
+
+// Cutting the chain: the view eases in to the chain, the jaws open around a link, a slow squeeze with a metal creak, then it snaps.
+// The bolt cutters model is one mesh, so it's split into its loose parts here and the two jaws and two handles get their own hinges.
+const cutAnim = { pose: [0, -0.24, -0.3, -2.2], on: false, t: 0, tool: null, rig: null, sent: false, creaks: 0, from: null };
+const CUT_LEN = 2.9, CUT_SNAP = 2.15;   // seconds: whole animation, and when the chain snaps
+const CHAIN_LINK = new THREE.Vector3(-0.25, 0.905, HEND + 0.06);   // a link left of the padlock
+function rigCutters(root) {
+  let mesh = null; root.traverse((o) => { if (o.isMesh && !mesh) mesh = o; }); if (!mesh || !mesh.geometry.index) return;
+  const g = mesh.geometry, p = g.attributes.position, idx = g.index, n = p.count;
+  // Group the triangles into loose parts (vertices at the same spot count as joined)
+  const par = new Int32Array(n).map((_, i) => i);
+  const find = (i) => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i]; } return i; };
+  const join = (a, b) => { a = find(a); b = find(b); if (a !== b) par[a] = b; };
+  for (let i = 0; i < idx.count; i += 3) { join(idx.getX(i), idx.getX(i + 1)); join(idx.getX(i), idx.getX(i + 2)); }
+  const seen = new Map();
+  for (let i = 0; i < n; i++) { const k = p.getX(i).toFixed(4) + ',' + p.getY(i).toFixed(4) + ',' + p.getZ(i).toFixed(4); if (seen.has(k)) join(i, seen.get(k)); else seen.set(k, i); }
+  const box = new Map();
+  for (let i = 0; i < n; i++) { const r = find(i); const b = box.get(r) || box.set(r, new THREE.Box3()).get(r); b.expandByPoint(new THREE.Vector3(p.getX(i), p.getY(i), p.getZ(i))); }
+  const full = new THREE.Box3().setFromBufferAttribute(p), H = full.max.y - full.min.y;
+  // Jaws: the parts that reach the tip; handles: the parts that reach the bottom. Left/right by which side they sit on.
+  const role = new Map();
+  for (const [r, b] of box) {
+    const cx = (b.min.x + b.max.x) / 2;
+    if (b.max.y > full.max.y - 0.02 * H && b.min.y > full.min.y + 0.5 * H) role.set(r, cx < 0 ? 'jawL' : 'jawR');
+    else if (b.min.y < full.min.y + 0.05 * H) role.set(r, cx < 0 ? 'hanL' : 'hanR');
+  }
+  const names = [...new Set(role.values())]; if (names.length < 4) return;
+  const tris = { rest: [], jawL: [], jawR: [], hanL: [], hanR: [] };
+  for (let i = 0; i < idx.count; i += 3) tris[role.get(find(idx.getX(i))) || 'rest'].push(idx.getX(i), idx.getX(i + 1), idx.getX(i + 2));
+  const part = (list) => { const geo = g.clone(); geo.setIndex(list); return new THREE.Mesh(geo, mesh.material); };
+  // Hinges: each jaw turns about the bolt near its base, each handle about the head; values measured from the model
+  const jb = box.get([...role].find(([, v]) => v === 'jawL')[0]), head = jb.min.y;
+  const pivots = { jawL: [-0.031, 0.254], jawR: [0.032, 0.254], hanL: [-0.04, head + 0.012], hanR: [0.04, head + 0.012] };
+  const rig = {};
+  mesh.geometry = (() => { const geo = g.clone(); geo.setIndex(tris.rest); return geo; })();
+  for (const k of ['jawL', 'jawR', 'hanL', 'hanR']) {
+    const pv = new THREE.Group(); pv.position.set(pivots[k][0], pivots[k][1], 0);
+    const m = part(tris[k]); m.position.set(-pivots[k][0], -pivots[k][1], 0); pv.add(m); mesh.add(pv); rig[k] = pv;
+  }
+  cutAnim.rig = rig;
+}
+// open: 0 = shut, 1 = jaws wide open around a link
+function setCutterOpen(open) {
+  const r = cutAnim.rig; if (!r) return;
+  r.jawL.rotation.z = 0.32 * open; r.jawR.rotation.z = -0.32 * open;
+  r.hanL.rotation.z = -0.13 * open; r.hanR.rotation.z = 0.13 * open;
+}
+function startCut() {
+  if (cutAnim.on) return;
+  if (!cutAnim.tool) { requestAction({ a: 'chain' }); return; }   // model not loaded yet: just cut
+  cutAnim.on = true; cutAnim.t = 0; cutAnim.sent = false; cutAnim.creaks = 0;
+  me.swing = -1; mouse.down = false; viewCutters.visible = true; viewAxe.visible = false;
+}
+// Runs every frame: where the camera and the cutters are during the cut
+const cutTmp = { m: new THREE.Matrix4(), q: new THREE.Quaternion(), p: new THREE.Vector3(), up: new THREE.Vector3(0, 1, 0) };
+function updateCut(dt) {
+  if (!cutAnim.on) return;
+  cutAnim.t += dt; const t = cutAnim.t;
+  // Ease in (0–0.7 s), hold, ease back out after the snap
+  const k = t < 0.7 ? ease(t / 0.7) : t < CUT_SNAP + 0.25 ? 1 : 1 - ease(Math.min(1, (t - CUT_SNAP - 0.25) / (CUT_LEN - CUT_SNAP - 0.25)));
+  const eye = camera.position, to = cutTmp.p.copy(eye).sub(CHAIN_LINK); const dist = to.length();
+  to.multiplyScalar(Math.min(1, 0.62 / Math.max(dist, 0.01))).add(CHAIN_LINK);   // 62 cm from the link
+  eye.lerp(to, k);
+  cutTmp.m.lookAt(eye, CHAIN_LINK, cutTmp.up); cutTmp.q.setFromRotationMatrix(cutTmp.m);
+  camera.quaternion.slerp(cutTmp.q, k);
+  // The cutters come to the middle of the view, jaws forward
+  const v = cutAnim.tool;
+  const P = cutAnim.pose;
+  viewCutters.position.set(lerp(viewCutters.position.x, P[0], k), lerp(-0.36, P[1], k), lerp(-0.6, P[2], k));
+  v.rotation.set(lerp(-1.25, P[3], k), lerp(0.25, 0, k), lerp(0.15, 0, k));
+  // Jaws: open wide (0.7–1.1 s), slow squeeze with creaks (1.1 s – snap), then shut
+  let open = 0;
+  if (t < 0.7) open = 0; else if (t < 1.1) open = ease((t - 0.7) / 0.4); else if (t < CUT_SNAP) open = 1 - 0.75 * ease((t - 1.1) / (CUT_SNAP - 1.1)); else open = 0;
+  setCutterOpen(open);
+  if (t > 1.1 && t < CUT_SNAP) {
+    me.shake = Math.max(me.shake, 0.1 + 0.25 * (t - 1.1) / (CUT_SNAP - 1.1));
+    if (cutAnim.creaks < 3 && t > 1.15 + cutAnim.creaks * 0.33) { cutAnim.creaks++; sfx.play('creak'); }
+  }
+  if (!cutAnim.sent && t >= CUT_SNAP) { cutAnim.sent = true; requestAction({ a: 'chain' }); }
+  if (t >= CUT_LEN) { cutAnim.on = false; setCutterOpen(0); v.rotation.set(-1.25, 0.25, 0.15); refreshHotbar(false); }
+}
 function buildHotbar() {
   const hb = $('hotbar'); hb.innerHTML = '';
   for (let i = 0; i < SLOT_COUNT; i++) {
@@ -2205,9 +2346,10 @@ function refreshHotbar(pop) {
   }
   viewAxe.visible = held() === 'axe' && hasAxe();
   viewCutters.visible = held() === 'cutters' && hasCutters();
+  updateToolView();
 }
 function selectSlot(i) {
-  if (me.stage !== 'free') return;
+  if (me.stage !== 'free' || cutAnim.on) return;
   me.equipped = me.equipped === i ? -1 : i;
   if (held()) sfx.play('equip');
   me.swing = -1; refreshHotbar(false);
@@ -2294,23 +2436,32 @@ let hover = null;   // what you're looking at
 let hoverTree = null;   // the tree in axe reach you're looking at
 const ray = new THREE.Raycaster();
 function pressInteract() {
-  if (me.stage !== 'free' || !hover) return;
+  if (me.stage !== 'free' || !hover || cutAnim.on) return;
   if (hover === 'box' && !world.glass) requestAction({ a: 'box' });
   if (hover === 'door' && !world.doorOpen && world.boards.every((b) => b === 0)) requestAction({ a: 'door' });
   if (hover.startsWith('jam')) tryJammed(+hover.slice(3));
   if (hover === 'cutters' && !world.cuttersOwner) requestAction({ a: 'cutters' });
-  if (hover === 'exit' && hasCutters() && !world.chainCut) requestAction({ a: 'chain' });
+  if (hover === 'exit' && hasCutters() && !world.chainCut) startCut();
   else if (hover === 'exit' && world.chainCut && !world.exitOpen) requestAction({ a: 'exitOpen' });
-  if (hover.startsWith('house')) requestAction({ a: 'house', i: +hover.slice(5) });
+  if (hover.startsWith('house')) {
+    const i = +hover.slice(5), h = HOUSES.find((x) => x.i === i);
+    const inside = h && h.side * (me.pos.z - h.z) > -HOUSE_D / 2 + WALL_T / 2;   // which side of the front wall you're on
+    requestAction({ a: 'house', i, dir: inside ? -1 : 1 });
+  }
   if (hover.startsWith('rock')) { if (invRoom('stone') > 0) requestAction({ a: 'rock', i: +hover.slice(4) }); else toast('Inventory full', 1800); }
   if (hover.startsWith('fire')) requestAction({ a: 'light', i: +hover.slice(4) });
   if (hover.startsWith('loot')) { const l = world.loot[+hover.slice(4)]; if (invRoom(l.id) > 0) requestAction({ a: 'loot', i: +hover.slice(4) }); else toast('Inventory full', 1800); }
 }
 function useItem() {
-  if (me.stage !== 'free' || !holdingAxe() || me.swing >= 0) return;
+  if (me.stage !== 'free' || me.swing >= 0 || cutAnim.on) return;
+  const id = held();
+  if (id === 'flashlight') { torchOn = !torchOn; sfx.play('equip'); updateToolView(); return; }
+  if (!holdingAxe() && id !== 'pickaxe' && id !== 'knife') return;
   me.swing = 0; me.swingHit = false; sfx.play('swoosh');
 }
 function swingHitCheck() {
+  if (held() === 'pickaxe') { const b = aimedBoulder(); if (b) mineBoulder(b); else if (aimedTree()) sfx.play('thunk'); return; }
+  if (held() === 'knife') { if (aimedTree() || aimedBoulder(2)) sfx.play('thunk'); return; }
   ray.setFromCamera({ x: 0, y: 0 }, camera); ray.far = 2.3;
   const live = boards.filter((b, i) => world.boards[i] > 0);
   const hit = ray.intersectObjects(live, false)[0];
@@ -2856,7 +3007,7 @@ function endLocal() {
   for (const id of [...remotes.keys()]) removeAvatar(id);
   beds.forEach((b) => b.straps.forEach((s) => (s.visible = false)));
   // Put away whatever you were holding so it doesn't float over the Home Menu
-  me.equipped = -1; me.swing = -1; viewAxe.visible = false; viewCutters.visible = false;
+  me.equipped = -1; me.swing = -1; viewAxe.visible = false; viewCutters.visible = false; viewTool.visible = false; torchBeam.intensity = 0;
   if (fireGhost) fireGhost.visible = false;
   showFreshRoom();
 }
@@ -3024,8 +3175,8 @@ function updatePlayer(dt, pad) {
     if (me.wakeT >= 1) { me.stage = 'free'; me.pos.y = EYE; me.vel.set(0, 0, 0); saveGame(); subtitle('I need to get out of here.', 2600); }
     return;
   }
-  // Free
-  const playing = !ui.stack.length;
+  // Free (no walking while cutting the chain)
+  const playing = !ui.stack.length && !cutAnim.on;
   let ix = 0, iz = 0;
   if (playing) {
     if (keys.KeyW || keys.ArrowUp) iz -= 1; if (keys.KeyS || keys.ArrowDown) iz += 1;
@@ -3066,7 +3217,7 @@ function updatePlayer(dt, pad) {
   if (!SHELTER_PAUSED && me.chapterDone && !me.shelter && houseAt(me.pos.x, me.pos.z) >= 0) shelterFound();
   // Axe swing
   if (me.swing >= 0) {
-    me.swing += dt / 0.55;
+    me.swing += dt / (SWING_TIME[held()] || 0.55);
     if (!me.swingHit && me.swing > 0.42) { me.swingHit = true; swingHitCheck(); }
     if (me.swing >= 1) { me.swing = -1; if (mouse.down && playing) useItem(); }
   }
@@ -3100,8 +3251,8 @@ function updateCamera(dt, time) {
   const breathe = me.stage === 'strapped' ? Math.sin(time * 1.4) * 0.008 : 0;
   camera.position.set(me.pos.x + Math.cos(me.yaw) * bobX + rand(-sh, sh), me.pos.y + bobY + breathe + rand(-sh, sh), me.pos.z - Math.sin(me.yaw) * bobX);
   tmpQ.set(me.pitch + rand(-sh, sh), me.yaw, 0); camera.quaternion.setFromEuler(tmpQ);
-  // Axe viewmodel: sway + swing
-  if (viewAxe.visible) {
+  // Axe / pickaxe / knife viewmodel: sway + swing
+  if (viewAxe.visible || viewTool.visible) {
     const s = me.swing;
     let rx = 0, rz = 0, py = 0, pz = 0;
     if (s >= 0) {
@@ -3109,10 +3260,12 @@ function updateCamera(dt, time) {
       else if (s < 0.5) { const k = ease((s - 0.3) / 0.2); rx = 1.1 - k * 2.3; py = 0.12 - k * 0.22; pz = -k * 0.15; }
       else { const k = ease((s - 0.5) / 0.5); rx = -1.2 * (1 - k); py = -0.1 * (1 - k); pz = -0.15 * (1 - k); }
     }
-    viewAxe.rotation.set(rx, 0, rz);
     // Keep it on screen in narrow windows: never further right than ~55% of the visible half-width
     const halfW = -AXE_HOLD.z * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect;
-    viewAxe.position.set(Math.min(AXE_HOLD.x, halfW * 0.55), AXE_HOLD.y + py + Math.sin(me.bob * 2) * 0.006, AXE_HOLD.z + pz);
+    for (const v of [viewAxe, viewTool]) {
+      v.rotation.set(rx, 0, rz);
+      v.position.set(Math.min(AXE_HOLD.x, halfW * 0.55), AXE_HOLD.y + py + Math.sin(me.bob * 2) * 0.006, AXE_HOLD.z + pz);
+    }
   }
   if (viewCutters.visible) viewCutters.position.set(Math.min(0.36, 0.6 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect * 0.55), -0.36 + Math.sin(me.bob * 2) * 0.006, -0.6);
 }
@@ -3166,6 +3319,9 @@ function updateHover() {
   const spot = updateFireGhost();
   if (spot && !hover) { prompt = spot.ok ? '<span class="key">Right-click</span> Place campfire' : "Can't place it here"; info = !spot.ok; }
   if (hoverTree) prompt = '<span class="key">Hold Click</span> Chop the tree';
+  // Holding the pickaxe at a boulder: hold click to mine stone
+  if (me.stage === 'free' && !hover && !spot && held() === 'pickaxe' && aimedBoulder()) prompt = '<span class="key">Hold Click</span> Mine stone';
+  if (cutAnim.on) { hover = null; prompt = ''; }
   const el = $('prompt'); if (el.innerHTML !== prompt) el.innerHTML = prompt; el.classList.toggle('info', info);
   $('crosshair').classList.toggle('hot', (!!hover || !!hoverTree) && !info);
   $('crosshair').style.display = me.stage === 'free' ? '' : 'none';
@@ -3197,6 +3353,7 @@ function tick(dt) {
   if (mode === 'game') {
     updatePlayer(dt, pad);
     updateCamera(dt, time);
+    updateCut(dt);
     updateHover();
     updateTreeBar(dt, hoverTree);
     updateCraft(dt);
@@ -3281,7 +3438,7 @@ async function boot() {
 boot();
 
 // Test hooks (read-only helpers for automated checks)
-window.__game = { me, world, net, rainFx, RECIPES, startCraft, giveItem, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
+window.__game = { me, world, net, rainFx, cutAnim, startCut, toolViews, torchBeam, aimedBoulder, fireLights, houseColliders, RECIPES, startCraft, giveItem, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
   step(sec) { for (let i = 0; i < sec * 60; i++) tick(1 / 60); },
   teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, HOUSES, houseDoors, houseAt, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes, aimedTree, invCount, INV_DEFS, CHAPTER1, mouse, fires, fireSpot, placeFire, get fireGhost() { return fireGhost; }, colliders, LOOT_SPOTS, lootMeshes, lootModels, interactables, objective, get hover() { return hover; } };
 </script>
