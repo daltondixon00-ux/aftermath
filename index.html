@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-27.2';
+window.GAME_VERSION = '2026-10-27.3';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -486,7 +486,7 @@ const sfx = {
     if (toFreq) o.frequency.exponentialRampToValueAtTime(toFreq, ctx.currentTime + dur);
     o.connect(g).connect(this.master); this.env(g, ctx.currentTime, .005, peak, dur); o.start(); o.stop(ctx.currentTime + dur + .1);
   },
-  play(name) {
+  play(name, vol = 1) {
     if (!this.ctx) return;
     const ctx = this.ctx;
     switch (name) {
@@ -513,6 +513,9 @@ const sfx = {
       case 'bang': { this.tone(70, .5, 1, 'sine', 32); const n = this.src(.4, 'lowpass', 320, 1); this.env(n.g, n.t, .002, 1, .35);
         setTimeout(() => { if (!this.ctx) return; this.tone(60, .45, .9, 'sine', 30); const m = this.src(.35, 'lowpass', 280, 1); this.env(m.g, m.t, .002, .9, .3); }, 260); break; }
       case 'equip': { const n = this.src(.15, 'bandpass', 1800, 3); this.env(n.g, n.t, .002, .25, .12); break; }
+      case 'crackle': { const n = this.src(.06, 'highpass', rand(1400, 4200), 1); this.env(n.g, n.t, .001, .22 * vol, rand(.02, .06)); break; }   // one pop of a burning fire
+      case 'ignite': { const n = this.src(1.1, 'bandpass', 300, .7); n.f.frequency.exponentialRampToValueAtTime(1400, n.t + .6); this.env(n.g, n.t, .15, .45, .8);
+        this.tone(70, .8, .12, 'sine', 110); break; }
     }
   },
 };
@@ -1325,7 +1328,7 @@ async function buildForest() {
   buildLooseStones(stone);
   makeGatherIcons(stone, variants);
   outside.ready = true;
-  if (mode === 'game') applyNature();
+  if (mode === 'game') { applyNature(); applyFires(); }
 }
 
 // =====================================================================
@@ -1371,8 +1374,15 @@ function makeGatherIcons(rock, variants) {
   end.position.z = 0.276; log.add(end);
   log.rotation.y = 0.5;   // turn it a little so the cut end shows
   INV_DEFS.wood.icon = makeIcon(log, 0.35);
-  // Campfire: a ring of the same stones with bark logs leaning together in the middle, seen a little from above
-  const fire = new THREE.Group(), barkMat = cyl.material;
+  // Campfire icon, seen a little from above. The icon maker turns things a quarter turn about the vertical,
+  // so tilting about z here tips the top toward the viewer.
+  const fire = buildFireGroup(cyl.material); fire.rotation.z = 0.6;
+  INV_DEFS.campfire.icon = makeIcon(fire, 0);
+  fireModel = buildFireGroup(cyl.material); fireModel.scale.setScalar(1.3);   // the one placed in the world
+}
+// Campfire: a ring of the same stones with bark logs leaning together in the middle
+function buildFireGroup(barkMat) {
+  const fire = new THREE.Group();
   for (let i = 0; i < 9; i++) {
     const a = (i / 9) * Math.PI * 2, s = outside.stones[i % Math.max(1, outside.stones.length)];
     if (!s) break;
@@ -1382,10 +1392,108 @@ function makeGatherIcons(rock, variants) {
     const a = (i / 4) * Math.PI * 2 + 0.4, l = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.028, 0.34, 8), barkMat);
     const tilt = new THREE.Group(); tilt.rotation.y = a; l.position.set(0.075, 0.15, 0); l.rotation.z = 0.5; tilt.add(l); fire.add(tilt);
   }
-  // The icon maker turns things a quarter turn about the vertical, so tilting about z here tips the top toward the viewer
-  fire.rotation.z = 0.6;
-  INV_DEFS.campfire.icon = makeIcon(fire, 0);
+  return fire;
 }
+
+// =====================================================================
+// Campfires: with one selected in the hotbar, a see-through preview sits where you look (green = OK, red = no);
+// right-click places it. Look at it and press F to start it. Shared with friends and saved (world.campfires).
+// =====================================================================
+const FIRE_REACH = 3, FIRE_HALF = 0.32;
+let fireModel = null, fireGhost = null;
+const fires = [];   // visuals for each world.campfires entry: { group, hit, light, flames, lit }
+const fireGhostMat = new THREE.MeshBasicMaterial({ color: 0x6fc27a, transparent: true, opacity: 0.45, depthWrite: false });
+const groundY = (x, z) => (insideBuilding(x, z) ? 0 : terrainH(x, z));
+// Where the campfire would go: the first ground point along your view, between 0.6 m and 3 m away
+function fireSpot() {
+  if (!fireModel || held() !== 'campfire' || mode !== 'game' || ui.stack.length || me.stage !== 'free') return null;
+  camera.getWorldDirection(aimDir); const o = camera.position;
+  for (let t = 0.6; t <= FIRE_REACH; t += 0.04) {
+    const x = o.x + aimDir.x * t, y = o.y + aimDir.y * t, z = o.z + aimDir.z * t, gy = groundY(x, z);
+    if (y <= gy) return { x, z, y: gy, ok: fireSpotOk(x, z) };
+  }
+  return null;
+}
+// OK if it's not in a wall, furniture, tree, boulder, another campfire, or right under your feet
+function fireSpotOk(x, z) {
+  if (Math.hypot(x - me.pos.x, z - me.pos.z) < 0.75) return false;
+  const p = { x, z }, warn = outside.warnT; outside.warnT = 99; collide(p); outside.warnT = warn;
+  return Math.hypot(p.x - x, p.z - z) < 0.02;
+}
+function updateFireGhost() {
+  const sp = fireSpot();
+  if (!sp) { if (fireGhost) fireGhost.visible = false; return null; }
+  if (!fireGhost) { fireGhost = fireModel.clone(); fireGhost.traverse((o) => { if (o.isMesh) { o.material = fireGhostMat; o.castShadow = false; } }); scene.add(fireGhost); }
+  fireGhost.visible = true; fireGhost.position.set(sp.x, sp.y, sp.z); fireGhost.rotation.y = me.yaw;
+  fireGhostMat.color.set(sp.ok ? 0x6fc27a : 0xe0533f);
+  return sp;
+}
+function placeFire() {
+  const sp = fireSpot(); if (!sp) return;
+  if (!sp.ok) { toast("Can't place it there", 1500); return; }
+  const s = me.bar[me.equipped]; if (!s || s.id !== 'campfire') return;
+  s.n -= 1; if (s.n <= 0) me.bar[me.equipped] = null;
+  if (houseAt(sp.x, sp.z) >= 0) me.placedFire = true;   // the objective wants it in a shelter
+  requestAction({ a: 'fire', x: +sp.x.toFixed(2), z: +sp.z.toFixed(2), rot: +me.yaw.toFixed(2) });
+  refreshHotbar(false); saveGame();
+}
+// A flame picture drawn in code (soft orange-yellow blob) for the flame sprites
+const flameTex = canvasTex(64, 128, (c, w, h) => {
+  const g = c.createRadialGradient(w / 2, h * 0.68, 2, w / 2, h * 0.6, w * 0.5);
+  g.addColorStop(0, 'rgba(255,240,180,1)'); g.addColorStop(0.35, 'rgba(255,170,60,.85)'); g.addColorStop(0.7, 'rgba(220,70,20,.35)'); g.addColorStop(1, 'rgba(120,20,0,0)');
+  c.fillStyle = g; c.beginPath(); c.ellipse(w / 2, h * 0.62, w * 0.48, h * 0.38, 0, 0, Math.PI * 2); c.fill();
+});
+function buildFire(i) {
+  const c = world.campfires[i]; if (!c || !fireModel) return;
+  const group = fireModel.clone(); group.position.set(c.x, groundY(c.x, c.z), c.z); group.rotation.y = c.rot || 0;
+  group.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; }); scene.add(group);
+  const hit = new THREE.Mesh(new THREE.SphereGeometry(0.4, 8, 6), new THREE.MeshBasicMaterial()); hit.visible = false;
+  hit.position.set(c.x, groundY(c.x, c.z) + 0.2, c.z); scene.add(hit); interactables.push({ mesh: hit, id: 'fire' + i });
+  fires[i] = { group, hit, light: null, flames: [], lit: false };
+}
+function lightFire(i) {
+  const f = fires[i], c = world.campfires[i]; if (!f || f.lit) return;
+  f.lit = true;
+  const y = groundY(c.x, c.z);
+  f.light = new THREE.PointLight(0xff8a3a, 3.2, 8, 2); f.light.position.set(c.x, y + 0.45, c.z); scene.add(f.light);
+  for (let k = 0; k < 9; k++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: flameTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, color: 0xffffff }));
+    sp.userData.phase = k / 9; sp.userData.dx = rand(-0.1, 0.1); sp.userData.dz = rand(-0.1, 0.1); scene.add(sp); f.flames.push(sp);
+  }
+}
+// Make the visuals match world.campfires (also clears them for a fresh world, e.g. behind the Home Menu)
+function applyFires() {
+  const list = world.campfires || [];
+  for (let i = fires.length - 1; i >= list.length; i--) removeFire(i);
+  fires.length = Math.min(fires.length, list.length);
+  for (let i = 0; i < list.length; i++) {
+    if (!fires[i]) buildFire(i);
+    if (fires[i] && list[i].lit && !fires[i].lit) lightFire(i);
+    if (fires[i] && !list[i].lit && fires[i].lit) { removeFire(i); buildFire(i); }
+  }
+}
+function removeFire(i) {
+  const f = fires[i]; if (!f) return;
+  scene.remove(f.group, f.hit); if (f.light) scene.remove(f.light); for (const s of f.flames) scene.remove(s);
+  const k = interactables.findIndex((it) => it.mesh === f.hit); if (k >= 0) interactables.splice(k, 1);
+  fires[i] = null;
+}
+// Flames rise and fade in a loop, the glow flickers, and nearby fires crackle
+function updateFires(dt, time) {
+  for (let i = 0; i < fires.length; i++) {
+    const f = fires[i], c = world.campfires[i]; if (!f || !f.lit || !c) continue;
+    const y = groundY(c.x, c.z);
+    for (const s of f.flames) {
+      const u = s.userData; u.phase = (u.phase + dt * 0.9) % 1; const p = u.phase;
+      s.position.set(c.x + u.dx * (1 - p), y + 0.2 + p * 0.65, c.z + u.dz * (1 - p));
+      const k = (1 - p * 0.8) * (0.85 + Math.sin(time * 13 + u.dx * 90) * 0.15); s.scale.set(0.6 * k, 0.9 * k, 1); s.material.opacity = Math.min(1, (1 - p) * 1.6);
+    }
+    f.light.intensity = 3.2 + Math.sin(time * 11.3 + i) * 0.35 + Math.sin(time * 23.7) * 0.25 + rand(-0.15, 0.15);
+    const d = Math.hypot(c.x - me.pos.x, c.z - me.pos.z);
+    if (mode === 'game' && d < 12 && Math.random() < dt * 5) sfx.play('crackle', Math.max(0.1, 1 - d / 12));
+  }
+}
+const fireColliders = () => (world.campfires || []).map((c) => ({ minX: c.x - FIRE_HALF * 0.7, maxX: c.x + FIRE_HALF * 0.7, minZ: c.z - FIRE_HALF * 0.7, maxZ: c.z + FIRE_HALF * 0.7 }));
 // Show the forest and stones the way the world says they are (chopped trees and taken stones gone)
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 function applyNature() {
@@ -1688,12 +1796,12 @@ function shelterFound() {
 // Players
 // =====================================================================
 // trees: tree id -> hits taken (5 = chopped down); treeWood: tree id -> wood it gives (12–18); rocks: ids of loose stones picked up
-const freshWorld = () => ({ glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false], trees: {}, treeWood: {}, rocks: [] });
+const freshWorld = () => ({ glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false], trees: {}, treeWood: {}, rocks: [], campfires: [] });
 const world = freshWorld();
 const me = {
   stage: 'menu', slot: 0, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0,
   baseYaw: 0, strap: 0, crouch: 0, bob: 0, onGround: true, vy: 0, equipped: -1, swing: -1, swingHit: false,
-  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, gatherObj: false, gatherDone: false, campfireDone: false, inv: [], bar: [], craftQ: [], wakeT: 0, shake: 0,
+  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, gatherObj: false, gatherDone: false, placedFire: false, fireLit: false, inv: [], bar: [], craftQ: [], wakeT: 0, shake: 0,
 };
 const remotes = new Map();   // id -> avatar
 
@@ -1785,6 +1893,14 @@ function doAction(by, act) {          // host only
     const wood = Math.floor(total * h / TREE_HITS) - Math.floor(total * hits / TREE_HITS);   // a little each hit, all of it by the last
     return { a: 'chop', id: act.id, hits: h, wood, by, fell: h >= TREE_HITS };
   }
+  if (act.a === 'fire' && Number.isFinite(act.x) && Number.isFinite(act.z)) {
+    world.campfires = world.campfires || [];
+    world.campfires.push({ x: act.x, z: act.z, rot: +act.rot || 0, lit: false });
+    return { a: 'fire', i: world.campfires.length - 1, by };
+  }
+  if (act.a === 'light' && world.campfires && world.campfires[act.i] && !world.campfires[act.i].lit) {
+    world.campfires[act.i].lit = true; return { a: 'light', i: act.i, by };
+  }
   if (act.a === 'rock' && Number.isInteger(act.i) && act.i >= 0) {
     world.rocks = world.rocks || []; if (world.rocks.includes(act.i)) return null;
     world.rocks.push(act.i); return { a: 'rock', i: act.i, by };
@@ -1821,6 +1937,12 @@ function playFx(fx) {
     if (fx.by === net.myId) { me.shake = Math.max(me.shake, 0.4); giveItem('wood', fx.wood); }
     if (fx.fell && p) fellTree(p);
   }
+  if (fx.a === 'fire') { applyFires(); sfx.play('thunk'); }
+  if (fx.a === 'light') {
+    applyFires(); sfx.play('ignite');
+    const c = world.campfires[fx.i];   // "Start the campfire" counts for whoever placed one in a shelter, whoever lights it
+    if (c && me.placedFire && !me.fireLit && (fx.by === net.myId || houseAt(c.x, c.z) >= 0)) { me.fireLit = true; saveGame(); }
+  }
   if (fx.a === 'rock') {
     const s = outside.stones[fx.i]; if (s) { s.taken = true; s.mesh.visible = false; }
     if (fx.by === net.myId) { sfx.play('pickup'); giveItem('stone', 1); }
@@ -1837,7 +1959,7 @@ function applyWorldInstant() {   // used when loading a save or joining mid-game
   doorPivot.rotation.y = world.doorOpen ? 1.62 : 0; doorState.t = world.doorOpen ? 1 : 0; doorState.opening = false;
   if (cuttersInWorld) cuttersInWorld.visible = !world.cuttersOwner;
   applyHouseDoors();
-  applyNature();
+  applyNature(); applyFires();
   exitDoor.opening = false; exitDoor.t = world.exitOpen ? 1 : 0; exitDoor.fall = world.chainCut ? 1 : 0;
   exitDoor.left.rotation.y = world.exitOpen ? 1.45 : 0; exitDoor.right.rotation.y = world.exitOpen ? -1.45 : 0;
   exitDoor.chain.position.y = world.chainCut ? -0.85 : 0; exitDoor.chain.rotation.z = world.chainCut ? 0.3 : 0;
@@ -1962,9 +2084,11 @@ addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouse.do
 document.addEventListener('mousemove', (e) => { if (locked) look(e.movementX, e.movementY, 0.0022); });
 canvas.addEventListener('mousedown', (e) => {
   if (mode !== 'game' || ui.stack.length) return;
+  if (e.button === 2) { placeFire(); if (!locked) lockPointer(); return; }   // right-click places a campfire held in the hotbar
   if (!locked) { lockPointer(); return; }
   if (e.button === 0) { mouse.down = true; useItem(); }
 });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('mouseup', () => (mouse.down = false));
 addEventListener('wheel', (e) => { if (mode === 'game' && !ui.stack.length && me.stage === 'free') selectSlot(((me.equipped < 0 ? 0 : me.equipped) + (e.deltaY > 0 ? 1 : -1) + SLOT_COUNT) % SLOT_COUNT); }, { passive: true });
 function lockPointer() { wantLock = true; const p = canvas.requestPointerLock && canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); }
@@ -2028,6 +2152,7 @@ function pressInteract() {
   else if (hover === 'exit' && world.chainCut && !world.exitOpen) requestAction({ a: 'exitOpen' });
   if (hover.startsWith('house')) requestAction({ a: 'house', i: +hover.slice(5) });
   if (hover.startsWith('rock')) { if (invRoom('stone') > 0) requestAction({ a: 'rock', i: +hover.slice(4) }); else toast('Inventory full', 1800); }
+  if (hover.startsWith('fire')) requestAction({ a: 'light', i: +hover.slice(4) });
 }
 function useItem() {
   if (me.stage !== 'free' || !holdingAxe() || me.swing >= 0) return;
@@ -2147,7 +2272,7 @@ const RECIPES = [
   { id: 'campfire', name: 'Campfire', cost: { wood: 10, stone: 5 }, time: 5, unlocked: () => me.gatherDone },
 ];
 const CRAFT_QUEUE_MAX = 5;
-let craftBeat = 0, craftBoxT = 0;
+let craftBoxT = 0;
 const recipeOf = (id) => RECIPES.find((x) => x.id === id);
 const inShelter = () => houseAt(me.pos.x, me.pos.z) >= 0;
 const canAfford = (r) => Object.entries(r.cost).every(([id, n]) => invCount(id) >= n);
@@ -2172,11 +2297,10 @@ function updateCraft(dt) {
   const q = me.craftQ[0];
   if (q) {
     const r = recipeOf(q.id);
-    if (q.t < r.time) { q.t = Math.min(r.time, q.t + dt); craftBeat += dt; if (craftBeat > 0.9) { craftBeat = 0; sfx.play('thunk'); } }
+    if (q.t < r.time) q.t = Math.min(r.time, q.t + dt);   // silent while crafting (user request)
     if (q.t >= r.time) {   // done: it goes into your inventory as soon as there's room
       if (invRoom(r.id) > 0) {
         me.craftQ.shift(); addItem(r.id, 1);
-        if (r.id === 'campfire') me.campfireDone = true;
         sfx.play('pickup'); toast(`${r.name} crafted`, 1800); saveGame();
         if (ui.stack[ui.stack.length - 1] === 'inv') renderInventory();
       } else if (!q.full) { q.full = true; toast('Inventory full: make room to finish crafting', 2600); }
@@ -2541,10 +2665,10 @@ function startLocal({ fresh, saved }) {
   const mine = net.players.get(net.myId); me.slot = mine ? mine.slot : 0;
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
-  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.campfireDone = false; me.inv = emptyInv(); me.bar = emptyBar(); me.craftQ = []; outside.f = 0;
+  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.placedFire = false; me.fireLit = false; me.inv = emptyInv(); me.bar = emptyBar(); me.craftQ = []; outside.f = 0;
   $('banner').style.opacity = 0; lastObj = '';
   if (saved && saved.me && saved.me.stage === 'free') {
-    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone; me.campfireDone = !!s.campfireDone;
+    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone; me.placedFire = !!s.placedFire; me.fireLit = !!s.fireLit;
     const box = (b) => (b && INV_DEFS[b.id] && b.n > 0 ? { id: b.id, n: Math.min(b.n, stackMax(b.id)) } : null);
     if (Array.isArray(s.inv)) me.inv = emptyInv().map((_, i) => box(s.inv[i]));
     if (Array.isArray(s.bar)) me.bar = emptyBar().map((_, i) => box(s.bar[i]));   // older saves: the axe/cutters get put back in their usual boxes
@@ -2573,6 +2697,7 @@ function endLocal() {
   beds.forEach((b) => b.straps.forEach((s) => (s.visible = false)));
   // Put away whatever you were holding so it doesn't float over the Home Menu
   me.equipped = -1; me.swing = -1; viewAxe.visible = false; viewCutters.visible = false;
+  if (fireGhost) fireGhost.visible = false;
   showFreshRoom();
 }
 // The Home Menu always shows the Hospital Room as it was at the very start (boards up, door shut, glass whole).
@@ -2592,7 +2717,7 @@ function saveGame() {
   const pose = me.stage === 'waking' ? standPose(me.slot) : null;
   save.game = {
     world: { ...world, boards: [...world.boards] },
-    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, campfireDone: me.campfireDone, inv: me.inv, bar: me.bar, craftQ: me.craftQ.map((q) => ({ id: q.id, t: q.t })) },
+    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, placedFire: me.placedFire, fireLit: me.fireLit, inv: me.inv, bar: me.bar, craftQ: me.craftQ.map((q) => ({ id: q.id, t: q.t })) },
   };
   persist();
 }
@@ -2611,7 +2736,8 @@ function objective() {
     if (!me.shelter) return 'Find Shelter';
     if (!me.gatherObj) return 'Use Tab to open inventory';
     if (!me.gatherDone) return `Gather Wood and Stone (Wood ${Math.min(invCount('wood'), GATHER.wood)}/${GATHER.wood} · Stone ${Math.min(invCount('stone'), GATHER.stone)}/${GATHER.stone})`;
-    if (!me.campfireDone) return 'Go back to shelter and craft a campfire';
+    if (!me.placedFire) return 'Craft and place a campfire in your shelter';
+    if (!me.fireLit) return 'Start the campfire  [F]';
     return 'More coming soon';
   }
   if (world.chainCut) return 'Open the door  [F]';
@@ -2663,7 +2789,8 @@ const CHAPTER1 = [
   ['Find Shelter', () => me.shelter],
   ['Use Tab to open inventory', () => me.gatherObj],
   ['Gather Wood and Stone', () => me.gatherDone],
-  ['Go back to shelter and craft a campfire', () => me.campfireDone],
+  ['Craft and place a campfire in your shelter', () => me.placedFire],
+  ['Start the campfire', () => me.fireLit],
 ];
 
 // =====================================================================
@@ -2692,7 +2819,7 @@ function collide(p) {
     p.x = best[0]; p.z = best[1];
   }
   if (exitOpen && !insideBuilding(p.x, p.z)) treeCollide(p);
-  const dyn = (open ? [{ minX: -0.7, maxX: -0.55, minZ: -10.3, maxZ: -9.1 }] : []).concat(exitOpen ? EXIT_LEAVES : [], houseColliders());   // open door slabs
+  const dyn = (open ? [{ minX: -0.7, maxX: -0.55, minZ: -10.3, maxZ: -9.1 }] : []).concat(exitOpen ? EXIT_LEAVES : [], houseColliders(), fireColliders());   // open door slabs, campfires
   for (const c of colliders.concat(dyn)) {
     const cx = clamp(p.x, c.minX, c.maxX), cz = clamp(p.z, c.minZ, c.maxZ);
     const dx = p.x - cx, dz = p.z - cz, d2 = dx * dx + dz * dz;
@@ -2844,6 +2971,9 @@ function updateHover() {
       }
     } else if (hover && hover.startsWith('jam')) {
       prompt = '<span class="key">F</span> Try the door';
+    } else if (hover && hover.startsWith('fire')) {
+      const c = (world.campfires || [])[+hover.slice(4)];
+      if (!c || c.lit) hover = null; else prompt = '<span class="key">F</span> Start the campfire';
     } else if (hover && hover.startsWith('rock')) {
       if ((world.rocks || []).includes(+hover.slice(4))) hover = null;
       else prompt = '<span class="key">F</span> Pick up stone';
@@ -2858,6 +2988,9 @@ function updateHover() {
   }
   // A tree in reach, when holding the axe: hold click to chop
   hoverTree = me.stage === 'free' && !hover && holdingAxe() ? aimedTree() : null;
+  // Holding a campfire: the preview shows where it would go
+  const spot = updateFireGhost();
+  if (spot && !hover) { prompt = spot.ok ? '<span class="key">Right-click</span> Place campfire' : "Can't place it here"; info = !spot.ok; }
   if (hoverTree) prompt = '<span class="key">Hold Click</span> Chop the tree';
   const el = $('prompt'); if (el.innerHTML !== prompt) el.innerHTML = prompt; el.classList.toggle('info', info);
   $('crosshair').classList.toggle('hot', (!!hover || !!hoverTree) && !info);
@@ -2896,7 +3029,7 @@ function tick(dt) {
     updateObjective();
     saveT += dt; if (saveT > 3) { saveT = 0; saveGame(); }
   } else if (mode === 'home') updateMenuCamera(time);
-  updateAvatars(dt); updateShards(dt); updateBoards(dt); updateDoor(dt); updateStraps(dt); updateExitDoor(dt); updateOutdoors(dt, time); updateHouseDoors(dt); updateFalling(dt); updateStones();
+  updateAvatars(dt); updateShards(dt); updateBoards(dt); updateDoor(dt); updateStraps(dt); updateExitDoor(dt); updateOutdoors(dt, time); updateHouseDoors(dt); updateFalling(dt); updateStones(); updateFires(dt, time);
   net.tick(dt);
   // Flickering light
   if (flickerPanel) {
@@ -2973,7 +3106,7 @@ boot();
 // Test hooks (read-only helpers for automated checks)
 window.__game = { me, world, net, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
   step(sec) { for (let i = 0; i < sec * 60; i++) tick(1 / 60); },
-  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, HOUSES, houseDoors, houseAt, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes, aimedTree, invCount, INV_DEFS, CHAPTER1, mouse };
+  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, HOUSES, houseDoors, houseAt, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes, aimedTree, invCount, INV_DEFS, CHAPTER1, mouse, fires, fireSpot, placeFire, get fireGhost() { return fireGhost; } };
 </script>
 </body>
 </html>
