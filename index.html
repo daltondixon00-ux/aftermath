@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-27.3';
+window.GAME_VERSION = '2026-10-27.4';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -1220,6 +1220,7 @@ async function loadOutdoorProps() {
   const [sofa, sofa2, arm, coffee, table, chair, cab] = await Promise.all(['Sofa_01', 'sofa_02', 'ArmChair_01', 'CoffeeTable_01', 'WoodenTable_01', 'WoodenChair_01', 'painted_wooden_cabinet'].map(loadModel));
   furnishHouses({ sofa, sofa2, arm, coffee, table, chair, cab });
   applyHouseDoors();
+  await loadLoot();
   await buildForest();
   renderer.compile(scene, camera);
 }
@@ -1773,6 +1774,86 @@ function furnishHouses(m) {
   }
 }
 
+// =====================================================================
+// Supplies in the houses (Search for supplies). Each new game puts 1–3 random items in every house.
+// world.loot = [{ id, h (house), s (spot), ry, taken }]; the host rolls it, everyone sees the same.
+// =====================================================================
+const LOOT_IDS = ['tshirt', 'pants', 'shoes', 'pickaxe', 'knife', 'flashlight'];
+// Free floor spots per layout (house-local x, z; y = height of the surface), clear of furniture and the door
+const LOOT_SPOTS = [
+  [[2.2, -1.5], [-1.8, -0.5], [3.2, -2.6], [2.7, 2.9], [0.9, -2.0], [-2.4, 0.9]],                 // living room
+  [[3.3, 2.6], [-1.6, 2.4], [2.0, -2.6], [-2.0, -2.6], [3.6, 0.2], [-0.8, -1.4]],                // kitchen
+  [[1.3, 2.6], [0.8, -2.4], [-2.4, -2.6], [2.4, -1.6], [-1.6, 1.6], [3.35, 2.0, MATTRESS_TOP]],  // bedroom (last one is on the bed)
+];
+const lootModels = {};   // id -> model, filled once they load
+const lootMeshes = [];   // what's in the world right now
+function rollLoot() {
+  const out = [];
+  const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  for (const h of HOUSES) {
+    const n = 1 + Math.floor(Math.random() * 3), ids = shuffle([...LOOT_IDS]), spots = shuffle(LOOT_SPOTS[h.i % 3].map((_, k) => k));
+    for (let k = 0; k < n; k++) out.push({ id: ids[k], h: h.i, s: spots[k], ry: +(Math.random() * 6.28).toFixed(2), taken: false });
+  }
+  return out;
+}
+// Lays a model on its widest side (lying on the floor, not standing on end), then sizes it
+function layFlat(obj, size) {
+  obj.updateMatrixWorld(true); const s = new THREE.Vector3(); new THREE.Box3().setFromObject(obj).getSize(s);
+  if (s.y > Math.min(s.x, s.z)) { if (s.x < s.z) obj.rotation.z = Math.PI / 2; else obj.rotation.x = Math.PI / 2; }
+  return fit(obj, size, { cast: false });
+}
+// Folded clothes: stacked folds of real fabric (Poly Haven textures)
+function foldedClothes(mat, w, d, folds) {
+  const g = new THREE.Group(); let y = 0;
+  folds.forEach(([fw, fd, fh, dz]) => {
+    const m = new THREE.Mesh(new RoundedBoxGeometry(w * fw, fh, d * fd, 3, Math.min(0.016, fh / 2.2)), mat);
+    m.position.set(0, y + fh / 2, dz); m.receiveShadow = true; g.add(m); y += fh * 0.92;
+  });
+  return g;
+}
+async function loadLoot() {
+  const [pick, knife, torch, boots] = await Promise.all(['picke_dirty_01', 'fish_knife', 'small_plastic_torch', 'rubber_boots'].map(loadModel));
+  if (pick) lootModels.pickaxe = layFlat(pick, 0.85);
+  if (knife) lootModels.knife = layFlat(knife, 0.3);
+  if (torch) lootModels.flashlight = layFlat(torch, 0.24);
+  if (boots) {   // the file has a clean pair and a dirty pair side by side: keep the dirty pair, about 38 cm tall
+    const clean = []; boots.traverse((o) => { if (o.isMesh && !/dirt/.test(o.name)) clean.push(o); });
+    if (clean.length < 4) clean.forEach((o) => o.parent.remove(o));
+    lootModels.shoes = fit(boots, 0.38, { cast: false });
+  }
+  const cotton = pbr('cotton_jersey', 0.12, { color: 0xa65a48 }), denim = pbr('denim_fabric', 0.12, { color: 0xb8c4d8 });
+  lootModels.tshirt = foldedClothes(cotton, 0.3, 0.26, [[1, 1, 0.03, 0], [0.96, 0.62, 0.022, 0.045], [0.34, 0.12, 0.016, -0.1]]);
+  lootModels.pants = foldedClothes(denim, 0.24, 0.34, [[1, 1, 0.032, 0], [1, 0.97, 0.03, 0], [0.98, 0.5, 0.028, 0.07]]);
+  // Inventory pictures, seen from above (the icon maker turns things a quarter turn, so tilting about z tips the top toward you)
+  // Wait for the fabric pictures first, or the clothes come out black
+  const texs = [cotton, denim].flatMap((m) => [m.map, m.normalMap, m.aoMap]);
+  for (let i = 0; i < 80 && !texs.every((t) => t.image && (t.image.complete || t.image.width)); i++) await new Promise((r) => setTimeout(r, 100));
+  for (const id of LOOT_IDS) {
+    if (!lootModels[id]) continue;
+    const v = new THREE.Group(); v.add(lootModels[id].clone()); v.rotation.z = id === 'shoes' ? 0.35 : 1.2;
+    INV_DEFS[id].icon = makeIcon(v, id === 'shoes' || id === 'tshirt' || id === 'pants' ? 0 : -0.6);
+  }
+  refreshHotbar(false); applyLoot();
+}
+// Puts the items for this game into the houses (and takes away ones already picked up)
+function applyLoot() {
+  for (const m of lootMeshes) m.parent && m.parent.remove(m);
+  lootMeshes.length = 0;
+  for (let i = interactables.length - 1; i >= 0; i--) if (interactables[i].id.startsWith('loot')) interactables.splice(i, 1);
+  (world.loot || []).forEach((l, i) => {
+    const h = HOUSES[l.h], spot = LOOT_SPOTS[l.h % 3] && LOOT_SPOTS[l.h % 3][l.s], model = lootModels[l.id];
+    if (!h || !h.group || !spot || !model || l.taken) return;
+    const g = new THREE.Group(); g.position.set(spot[0], (spot[2] || 0.025) + 0.002, spot[1]);   // resting on the floor (0.025) or the mattress g.rotation.y = l.ry || 0;
+    g.add(model.clone());
+    // An easy-to-hit invisible box around it so you don't have to aim at a thin knife exactly
+    const b = new THREE.Box3().setFromObject(model), sz = new THREE.Vector3(); b.getSize(sz);
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(Math.max(0.3, sz.x + 0.1), Math.max(0.25, sz.y + 0.15), Math.max(0.3, sz.z + 0.1)), lootHitMat);
+    hit.visible = false; hit.position.y = Math.max(0.25, sz.y + 0.15) / 2 - 0.03; g.add(hit);
+    h.group.add(g); lootMeshes.push(g); interactables.push({ mesh: hit, id: 'loot' + i });
+  });
+}
+const lootHitMat = new THREE.MeshBasicMaterial();
+
 function applyHouseDoors() { houseDoors.forEach((d, i) => { if (d) { d.t = d.target = world.houses && world.houses[i] ? 1 : 0; d.pivot.rotation.y = -1.45 * d.t; } }); }
 function updateHouseDoors(dt) {
   for (const d of houseDoors) {
@@ -1788,6 +1869,10 @@ function houseColliders() {
 }
 // Find Shelter: tick it off the first time you step inside a house (the objective box plays the chime).
 // Tab opens the inventory from now on.
+// PAUSED (user, 2026-10-27): Find Shelter and everything after it is switched off for now. After Search for supplies
+// the objective is "Explore". Set this to false to bring it all back (nothing was removed). Saves already past
+// Find Shelter keep going as before.
+const SHELTER_PAUSED = true;
 function shelterFound() {
   me.shelter = true; toast('Shelter found'); saveGame();
 }
@@ -1796,12 +1881,12 @@ function shelterFound() {
 // Players
 // =====================================================================
 // trees: tree id -> hits taken (5 = chopped down); treeWood: tree id -> wood it gives (12–18); rocks: ids of loose stones picked up
-const freshWorld = () => ({ glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false], trees: {}, treeWood: {}, rocks: [], campfires: [] });
+const freshWorld = () => ({ glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false], trees: {}, treeWood: {}, rocks: [], campfires: [], loot: null });
 const world = freshWorld();
 const me = {
   stage: 'menu', slot: 0, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0,
   baseYaw: 0, strap: 0, crouch: 0, bob: 0, onGround: true, vy: 0, equipped: -1, swing: -1, swingHit: false,
-  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, gatherObj: false, gatherDone: false, placedFire: false, fireLit: false, inv: [], bar: [], craftQ: [], wakeT: 0, shake: 0,
+  seenDoor: false, chapterDone: false, supplies: false, shelter: false, invOpened: false, gatherObj: false, gatherDone: false, placedFire: false, fireLit: false, inv: [], bar: [], craftQ: [], wakeT: 0, shake: 0,
 };
 const remotes = new Map();   // id -> avatar
 
@@ -1905,6 +1990,9 @@ function doAction(by, act) {          // host only
     world.rocks = world.rocks || []; if (world.rocks.includes(act.i)) return null;
     world.rocks.push(act.i); return { a: 'rock', i: act.i, by };
   }
+  if (act.a === 'loot' && world.loot && world.loot[act.i] && !world.loot[act.i].taken) {
+    world.loot[act.i].taken = true; return { a: 'loot', i: act.i, by };
+  }
   if (act.a === 'house' && act.i >= 0 && act.i < HOUSES.length) { world.houses = world.houses || []; world.houses[act.i] = !world.houses[act.i]; return { a: 'house', i: act.i, open: world.houses[act.i], by }; }
   return null;
 }
@@ -1947,6 +2035,11 @@ function playFx(fx) {
     const s = outside.stones[fx.i]; if (s) { s.taken = true; s.mesh.visible = false; }
     if (fx.by === net.myId) { sfx.play('pickup'); giveItem('stone', 1); }
   }
+  if (fx.a === 'loot') {
+    applyLoot();
+    const l = world.loot && world.loot[fx.i];
+    if (l && fx.by === net.myId) { sfx.play('pickup'); giveItem(l.id, 1); if (!me.supplies) { me.supplies = true; saveGame(); } }
+  }
   if (fx.a === 'house' && houseDoors[fx.i]) { houseDoors[fx.i].target = fx.open ? 1 : 0; sfx.play(fx.open ? 'door' : 'thunk'); }
 }
 function applyWorldInstant() {   // used when loading a save or joining mid-game
@@ -1959,7 +2052,7 @@ function applyWorldInstant() {   // used when loading a save or joining mid-game
   doorPivot.rotation.y = world.doorOpen ? 1.62 : 0; doorState.t = world.doorOpen ? 1 : 0; doorState.opening = false;
   if (cuttersInWorld) cuttersInWorld.visible = !world.cuttersOwner;
   applyHouseDoors();
-  applyNature(); applyFires();
+  applyNature(); applyFires(); applyLoot();
   exitDoor.opening = false; exitDoor.t = world.exitOpen ? 1 : 0; exitDoor.fall = world.chainCut ? 1 : 0;
   exitDoor.left.rotation.y = world.exitOpen ? 1.45 : 0; exitDoor.right.rotation.y = world.exitOpen ? -1.45 : 0;
   exitDoor.chain.position.y = world.chainCut ? -0.85 : 0; exitDoor.chain.rotation.z = world.chainCut ? 0.3 : 0;
@@ -2153,6 +2246,7 @@ function pressInteract() {
   if (hover.startsWith('house')) requestAction({ a: 'house', i: +hover.slice(5) });
   if (hover.startsWith('rock')) { if (invRoom('stone') > 0) requestAction({ a: 'rock', i: +hover.slice(4) }); else toast('Inventory full', 1800); }
   if (hover.startsWith('fire')) requestAction({ a: 'light', i: +hover.slice(4) });
+  if (hover.startsWith('loot')) { const l = world.loot[+hover.slice(4)]; if (invRoom(l.id) > 0) requestAction({ a: 'loot', i: +hover.slice(4) }); else toast('Inventory full', 1800); }
 }
 function useItem() {
   if (me.stage !== 'free' || !holdingAxe() || me.swing >= 0) return;
@@ -2187,7 +2281,7 @@ const ui = {
   back() {
     if (this.stack.length) {
       // Closing the inventory the first time gives the next objective
-      if (this.stack[this.stack.length - 1] === 'inv' && !me.gatherObj) {
+      if (this.stack[this.stack.length - 1] === 'inv' && !me.gatherObj && me.shelter) {
         me.gatherObj = true; checkGather(); saveGame();
       }
       this.stack.pop(); this.render(); if (mode === 'game' && !this.stack.length) lockPointer(); return; }
@@ -2216,6 +2310,9 @@ const INV_ROWS = 5, INV_COLS = 5, STACK_MAX = 100, BAR0 = INV_ROWS * INV_COLS;
 const INV_DEFS = {   // icons are drawn once the models have loaded
   axe: { name: 'Axe', icon: '', tool: true }, cutters: { name: 'Bolt cutters', icon: '', tool: true },
   stone: { name: 'Stone', icon: '' }, wood: { name: 'Wood', icon: '' }, campfire: { name: 'Campfire', icon: '' },
+  // Supplies found in the houses (one per box for now)
+  tshirt: { name: 'T-shirt', icon: '', tool: true }, pants: { name: 'Pants', icon: '', tool: true }, shoes: { name: 'Shoes', icon: '', tool: true },
+  pickaxe: { name: 'Pickaxe', icon: '', tool: true }, knife: { name: 'Knife', icon: '', tool: true }, flashlight: { name: 'Flashlight', icon: '', tool: true },
 };
 const stackMax = (id) => (INV_DEFS[id] && INV_DEFS[id].tool ? 1 : STACK_MAX);
 const GATHER = { wood: 15, stone: 5 };   // "Gather Wood and Stone" is done at this much of each
@@ -2344,9 +2441,9 @@ let invTab = 'inventory';
 function toggleInventory() {
   const top = ui.stack[ui.stack.length - 1];
   if (top === 'inv') { ui.back(); return; }
-  if (ui.stack.length || me.stage !== 'free' || !me.shelter) return;
+  if (ui.stack.length || me.stage !== 'free' || !(me.shelter || me.supplies)) return;   // unlocked by your first supply too
   ui.open('inv');
-  if (!me.invOpened) { me.invOpened = true; saveGame(); }   // ticked off (✓ + chime) when the inventory closes
+  if (!me.invOpened && me.shelter) { me.invOpened = true; saveGame(); }   // ticked off (✓ + chime) when the inventory closes
 }
 function renderInventory() {
   for (const b of $('invTabs').children) b.classList.toggle('on', b.dataset.tab === invTab);
@@ -2615,6 +2712,8 @@ const net = {
     // Only the host's own items carry over from a save
     if (world.axeOwner && world.axeOwner !== 'host') world.axeOwner = 'host';
     if (world.cuttersOwner && world.cuttersOwner !== 'host') world.cuttersOwner = 'host';
+    // New supplies in the houses for every new game (older saves get some too)
+    if (!Array.isArray(world.loot)) world.loot = rollLoot();
     this.broadcast({ t: 'start', world, players: [...this.players.values()] });
     startLocal({ fresh: !g, saved: g });
   },
@@ -2665,10 +2764,10 @@ function startLocal({ fresh, saved }) {
   const mine = net.players.get(net.myId); me.slot = mine ? mine.slot : 0;
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
-  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.placedFire = false; me.fireLit = false; me.inv = emptyInv(); me.bar = emptyBar(); me.craftQ = []; outside.f = 0;
+  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.supplies = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.placedFire = false; me.fireLit = false; me.inv = emptyInv(); me.bar = emptyBar(); me.craftQ = []; outside.f = 0;
   $('banner').style.opacity = 0; lastObj = '';
   if (saved && saved.me && saved.me.stage === 'free') {
-    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone; me.placedFire = !!s.placedFire; me.fireLit = !!s.fireLit;
+    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.supplies = !!s.supplies; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone; me.placedFire = !!s.placedFire; me.fireLit = !!s.fireLit;
     const box = (b) => (b && INV_DEFS[b.id] && b.n > 0 ? { id: b.id, n: Math.min(b.n, stackMax(b.id)) } : null);
     if (Array.isArray(s.inv)) me.inv = emptyInv().map((_, i) => box(s.inv[i]));
     if (Array.isArray(s.bar)) me.bar = emptyBar().map((_, i) => box(s.bar[i]));   // older saves: the axe/cutters get put back in their usual boxes
@@ -2717,7 +2816,7 @@ function saveGame() {
   const pose = me.stage === 'waking' ? standPose(me.slot) : null;
   save.game = {
     world: { ...world, boards: [...world.boards] },
-    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, placedFire: me.placedFire, fireLit: me.fireLit, inv: me.inv, bar: me.bar, craftQ: me.craftQ.map((q) => ({ id: q.id, t: q.t })) },
+    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, supplies: me.supplies, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, placedFire: me.placedFire, fireLit: me.fireLit, inv: me.inv, bar: me.bar, craftQ: me.craftQ.map((q) => ({ id: q.id, t: q.t })) },
   };
   persist();
 }
@@ -2733,6 +2832,8 @@ function objective() {
   if (me.stage === 'waking') return 'Break free from the straps';
   if (world.exitOpen) {
     if (!me.chapterDone) return 'Go outside';
+    if (!me.supplies && !me.shelter) return 'Search for supplies';
+    if (SHELTER_PAUSED && !me.shelter) return 'Explore';
     if (!me.shelter) return 'Find Shelter';
     if (!me.gatherObj) return 'Use Tab to open inventory';
     if (!me.gatherDone) return `Gather Wood and Stone (Wood ${Math.min(invCount('wood'), GATHER.wood)}/${GATHER.wood} · Stone ${Math.min(invCount('stone'), GATHER.stone)}/${GATHER.stone})`;
@@ -2786,6 +2887,7 @@ const CHAPTER1 = [
   ['Cut the chain on the exit door', () => world.chainCut],
   ['Open the exit door', () => world.exitOpen],
   ['Go outside', () => me.chapterDone],
+  ['Search for supplies', () => me.supplies],
   ['Find Shelter', () => me.shelter],
   ['Use Tab to open inventory', () => me.gatherObj],
   ['Gather Wood and Stone', () => me.gatherDone],
@@ -2892,7 +2994,7 @@ function updatePlayer(dt, pad) {
     me.chapterDone = true; sfx.play('chime'); $('banner').style.opacity = 1; setTimeout(() => ($('banner').style.opacity = 0), 5200); saveGame();
     setTimeout(() => subtitle('Fresh air… The town should be down that road.', 3600), 1500);
   }
-  if (me.chapterDone && !me.shelter && houseAt(me.pos.x, me.pos.z) >= 0) shelterFound();
+  if (!SHELTER_PAUSED && me.chapterDone && !me.shelter && houseAt(me.pos.x, me.pos.z) >= 0) shelterFound();
   // Axe swing
   if (me.swing >= 0) {
     me.swing += dt / 0.55;
@@ -2974,6 +3076,9 @@ function updateHover() {
     } else if (hover && hover.startsWith('fire')) {
       const c = (world.campfires || [])[+hover.slice(4)];
       if (!c || c.lit) hover = null; else prompt = '<span class="key">F</span> Start the campfire';
+    } else if (hover && hover.startsWith('loot')) {
+      const l = (world.loot || [])[+hover.slice(4)];
+      if (!l || l.taken) hover = null; else prompt = `<span class="key">F</span> Pick up ${INV_DEFS[l.id].name}`;
     } else if (hover && hover.startsWith('rock')) {
       if ((world.rocks || []).includes(+hover.slice(4))) hover = null;
       else prompt = '<span class="key">F</span> Pick up stone';
@@ -3106,7 +3211,7 @@ boot();
 // Test hooks (read-only helpers for automated checks)
 window.__game = { me, world, net, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
   step(sec) { for (let i = 0; i < sec * 60; i++) tick(1 / 60); },
-  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, HOUSES, houseDoors, houseAt, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes, aimedTree, invCount, INV_DEFS, CHAPTER1, mouse, fires, fireSpot, placeFire, get fireGhost() { return fireGhost; } };
+  teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, HOUSES, houseDoors, houseAt, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes, aimedTree, invCount, INV_DEFS, CHAPTER1, mouse, fires, fireSpot, placeFire, get fireGhost() { return fireGhost; }, colliders, LOOT_SPOTS, lootMeshes, lootModels, interactables, objective, get hover() { return hover; } };
 </script>
 </body>
 </html>
