@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-27.1';
+window.GAME_VERSION = '2026-10-27.2';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -169,7 +169,31 @@ window.GAME_VERSION = '2026-10-27.1';
   .rcost .ok { color: var(--green); } .rcost .short { color: var(--red); }
   .craftBtn { position: relative; overflow: hidden; width: 100%; }
   .craftBtn:hover, .craftBtn:focus-visible { transform: none; }
-  .craftFill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(111, 194, 122, .55); pointer-events: none; }
+  /* "Crafting now" queue rows on the Crafting page: picture, name, time left, progress bar, ✕ to cancel */
+  .qRow { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .qRow img { width: 40px; height: 40px; flex: none; }
+  .qMid { flex: 1; min-width: 0; }
+  .qTop { display: flex; justify-content: space-between; font-size: 20px; }
+  .qTop span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .qBar { height: 6px; border-radius: 3px; background: rgba(0, 0, 0, .5); overflow: hidden; margin-top: 4px; }
+  .qBar div { height: 100%; background: var(--green); }
+  .qX { width: 34px; height: 34px; font-size: 16px; flex: none; }
+  .qX:hover, .qX:focus-visible { border-color: var(--red); color: var(--red); }
+  /* Dragging items between boxes */
+  .dragGhost { position: fixed; z-index: 70; pointer-events: none; transform: translate(-50%, -50%) scale(1.05); border-color: var(--amber); opacity: .9; }
+  #invBody .slot.dragFrom > * { opacity: .25; }
+  #invBody .slot.dropOver { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(226,164,59,.35); }
+  #invBody [data-k] { cursor: grab; }
+  /* Crafting box at the bottom left (shows while something is crafting and the inventory is closed) */
+  #craftBox { position: absolute; left: 32px; bottom: 26px; width: 160px; padding: 8px 10px; border-radius: 6px; background: var(--panel);
+    border: 2px solid var(--line); border-left: 4px solid var(--green); display: none; }
+  #craftBox.show { display: block; }
+  #craftBox .label { display: flex; align-items: center; gap: 6px; color: var(--green); margin-bottom: 4px; font-size: 15px; }
+  #craftBox .label svg { width: 15px; height: 15px; }
+  .cbRow { display: flex; align-items: center; gap: 6px; font-size: 17px; line-height: 1.2; }
+  .cbRow img { width: 26px; height: 26px; flex: none; }
+  .cbName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cbTime { font-variant-numeric: tabular-nums; color: var(--text); }
   .craftLbl { position: relative; }
   .slot .cnt { position: absolute; right: 5px; bottom: 2px; font-size: 17px; font-weight: 700; text-shadow: 0 1px 3px #000; }
   .slot .nm { font-size: 14px; color: var(--muted); text-align: center; line-height: 1.1; }
@@ -355,6 +379,7 @@ window.GAME_VERSION = '2026-10-27.1';
     <circle id="holdArc" cx="42" cy="42" r="36" stroke="#e2a43b" stroke-dasharray="226.2" stroke-dashoffset="226.2" transform="rotate(-90 42 42)" stroke-linecap="round"></circle>
   </svg>
   <div id="hotbar"></div>
+  <div id="craftBox"><div class="label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L3 15l3 3 8-8"/></svg>Crafting</div><div id="craftRows"></div></div>
   <button class="icon-btn" id="pauseBtn" data-act="pause" title="Pause" aria-label="Pause">
     <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
   </button>
@@ -975,7 +1000,7 @@ async function loadHallwayProps() {
     models.cutters = fit(cutters, 0.7);
     cuttersInWorld = models.cutters.clone(); cuttersInWorld.position.set(3.75, 0.005, -30.3); cuttersInWorld.rotation.y = 0.7; cuttersInWorld.visible = !world.cuttersOwner; scene.add(cuttersInWorld);
     const v = models.cutters.clone(); v.traverse((o) => { if (o.isMesh) o.castShadow = false; }); v.rotation.set(-1.25, 0.25, 0.15); v.position.set(0, -0.05, 0); viewCutters.add(v);
-    ITEMS[1].icon = makeIcon(models.cutters, 0.75); refreshHotbar(false);
+    INV_DEFS.cutters.icon = makeIcon(models.cutters, 0.75); refreshHotbar(false);
   }
   const put = (m, x, y, z, ry = 0, extra) => { if (!m) return null; const c = m.clone(); c.position.set(x, y, z); c.rotation.y = ry; if (extra) extra(c); scene.add(c); return c; };
   const topOf = (m) => new THREE.Box3().setFromObject(m).max.y;
@@ -1668,7 +1693,7 @@ const world = freshWorld();
 const me = {
   stage: 'menu', slot: 0, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0,
   baseYaw: 0, strap: 0, crouch: 0, bob: 0, onGround: true, vy: 0, equipped: -1, swing: -1, swingHit: false,
-  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, gatherObj: false, gatherDone: false, campfireDone: false, inv: [], wakeT: 0, shake: 0,
+  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, gatherObj: false, gatherDone: false, campfireDone: false, inv: [], bar: [], craftQ: [], wakeT: 0, shake: 0,
 };
 const remotes = new Map();   // id -> avatar
 
@@ -1732,7 +1757,7 @@ function updateAvatars(dt) {
       ['Idle', 'Walk', 'Run'].forEach((n, i) => { const ac = a.actions[n]; if (ac) ac.setEffectiveWeight(lerp(ac.getEffectiveWeight(), w[i], 1 - Math.exp(-dt * 10))); });
       a.mixer.update(dt);
     }
-    if (a.axe) a.axe.visible = a.equipped === 0 && world.axeOwner === a.id;
+    if (a.axe) a.axe.visible = a.equipped === 'axe' && world.axeOwner === a.id;
     a.label.position.copy(a.root.position); a.label.position.y += strapped ? 0.75 : 2.05;
     a.label.visible = true;
   }
@@ -1775,8 +1800,8 @@ function requestAction(act) {
 function playFx(fx) {
   if (fx.a === 'box') {
     glassMesh.visible = false; emergencyGlow.visible = false; sfx.play('glass'); spawnShards();
-    if (axeInBox) setTimeout(() => { axeInBox.visible = false; if (fx.by === net.myId) { sfx.play('pickup'); refreshHotbar(true); toast('Axe added to your hotbar'); } }, 450);
-    else if (fx.by === net.myId) refreshHotbar(true);
+    if (axeInBox) setTimeout(() => { axeInBox.visible = false; if (fx.by === net.myId) { sfx.play('pickup'); refreshHotbar('axe'); toast('Axe added to your hotbar'); } }, 450);
+    else if (fx.by === net.myId) refreshHotbar('axe');
   }
   if (fx.a === 'hit') {
     const b = boards[fx.i]; sfx.play('thunk'); b.userData.shake = 1; spawnChips(b.position);
@@ -1784,7 +1809,7 @@ function playFx(fx) {
     if (fx.off) setTimeout(() => { dropBoard(b); sfx.play('boardFall'); }, 80);
   }
   if (fx.a === 'door') openDoor();
-  if (fx.a === 'cutters') { if (cuttersInWorld) cuttersInWorld.visible = false; if (fx.by === net.myId) { sfx.play('pickup'); refreshHotbar(1); toast('Bolt cutters added to your hotbar'); } }
+  if (fx.a === 'cutters') { if (cuttersInWorld) cuttersInWorld.visible = false; if (fx.by === net.myId) { sfx.play('pickup'); refreshHotbar('cutters'); toast('Bolt cutters added to your hotbar'); } }
   if (fx.a === 'chain') {
     sfx.play('snap'); setTimeout(() => sfx.play('clank'), 250); exitDoor.fall = 0.01; if (fx.by === net.myId) me.shake = Math.max(me.shake, 0.5);
   }
@@ -1885,10 +1910,6 @@ function makeIcon(model, rotZ = -0.7) {
   r.render(s, cam); const url = r.domElement.toDataURL(); r.dispose(); r.forceContextLoss(); return url;
 }
 const viewCutters = new THREE.Group(); camera.add(viewCutters); viewCutters.visible = false; viewCutters.position.set(0.36, -0.36, -0.6);
-const ITEMS = [
-  { name: 'Axe', has: () => world.axeOwner === net.myId, icon: '', view: null },
-  { name: 'Bolt cutters', has: () => world.cuttersOwner === net.myId, icon: '', view: viewCutters },
-];
 function buildHotbar() {
   const hb = $('hotbar'); hb.innerHTML = '';
   for (let i = 0; i < SLOT_COUNT; i++) {
@@ -1899,25 +1920,23 @@ function buildHotbar() {
 }
 const hasAxe = () => world.axeOwner === net.myId;
 const hasCutters = () => world.cuttersOwner === net.myId;
-function refreshHotbar(pop) {   // pop: slot number to animate (true = slot 1)
+// Redraws the 5 hotbar boxes from me.bar. pop: the item id that just arrived (its box bounces).
+function refreshHotbar(pop) {
+  syncTools();
   const slots = $('hotbar').children;
-  if (pop === true) pop = 0;
   for (let i = 0; i < SLOT_COUNT; i++) {
-    const el = slots[i], it = ITEMS[i], item = !!(it && it.has() && it.icon);
-    let img = el.querySelector('img');
-    if (item && !img) { img = document.createElement('img'); img.src = it.icon; img.alt = it.name; el.appendChild(img); }
-    if (!item && img) img.remove();
+    const el = slots[i], html = `<span class="n">${i + 1}</span>` + boxHTML(me.bar[i]);
+    if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
     el.classList.toggle('on', me.equipped === i);
-    if (pop === i && item) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
+    if (pop && me.bar[i] && me.bar[i].id === pop) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
   }
-  if (me.equipped >= 0 && ITEMS[me.equipped] && !ITEMS[me.equipped].has()) me.equipped = -1;
-  viewAxe.visible = me.equipped === 0 && hasAxe();
-  viewCutters.visible = me.equipped === 1 && hasCutters();
+  viewAxe.visible = held() === 'axe' && hasAxe();
+  viewCutters.visible = held() === 'cutters' && hasCutters();
 }
 function selectSlot(i) {
   if (me.stage !== 'free') return;
   me.equipped = me.equipped === i ? -1 : i;
-  if (ITEMS[me.equipped] && ITEMS[me.equipped].has()) sfx.play('equip');
+  if (held()) sfx.play('equip');
   me.swing = -1; refreshHotbar(false);
 }
 
@@ -2011,7 +2030,7 @@ function pressInteract() {
   if (hover.startsWith('rock')) { if (invRoom('stone') > 0) requestAction({ a: 'rock', i: +hover.slice(4) }); else toast('Inventory full', 1800); }
 }
 function useItem() {
-  if (me.stage !== 'free' || me.equipped !== 0 || !hasAxe() || me.swing >= 0) return;
+  if (me.stage !== 'free' || !holdingAxe() || me.swing >= 0) return;
   me.swing = 0; me.swingHit = false; sfx.play('swoosh');
 }
 function swingHitCheck() {
@@ -2065,78 +2084,137 @@ const ui = {
   },
 };
 
-// Inventory (Tab). Locked until Find Shelter is done. Hotbar items show only in the hotbar row, never in the grid.
-const INV_ROWS = 5, INV_COLS = 5, STACK_MAX = 100;
-const INV_DEFS = { stone: { name: 'Stone', icon: '' }, wood: { name: 'Wood', icon: '' }, campfire: { name: 'Campfire', icon: '' } };   // icons are drawn once the forest has loaded
+// Inventory (Tab). Locked until Find Shelter is done.
+// Every box holds null or { id, n }: me.inv = the 25 grid boxes, me.bar = the 5 hotbar boxes.
+// Box number k: 0–24 = grid, 25–29 = hotbar. Anything can be dragged to any box.
+const INV_ROWS = 5, INV_COLS = 5, STACK_MAX = 100, BAR0 = INV_ROWS * INV_COLS;
+const INV_DEFS = {   // icons are drawn once the models have loaded
+  axe: { name: 'Axe', icon: '', tool: true }, cutters: { name: 'Bolt cutters', icon: '', tool: true },
+  stone: { name: 'Stone', icon: '' }, wood: { name: 'Wood', icon: '' }, campfire: { name: 'Campfire', icon: '' },
+};
+const stackMax = (id) => (INV_DEFS[id] && INV_DEFS[id].tool ? 1 : STACK_MAX);
 const GATHER = { wood: 15, stone: 5 };   // "Gather Wood and Stone" is done at this much of each
 const emptyInv = () => Array(INV_ROWS * INV_COLS).fill(null);
-const invCount = (id) => me.inv.reduce((n, s) => n + (s && s.id === id ? s.n : 0), 0);
-const invRoom = (id) => me.inv.reduce((n, s) => n + (!s ? STACK_MAX : s.id === id ? STACK_MAX - s.n : 0), 0);
-// Adds up to n of an item (topping up stacks first, then empty boxes). Returns how many fit.
+const emptyBar = () => Array(SLOT_COUNT).fill(null);
+const allBoxes = () => me.inv.concat(me.bar);
+const getBox = (k) => (k < BAR0 ? me.inv[k] : me.bar[k - BAR0]);
+const setBox = (k, v) => { if (k < BAR0) me.inv[k] = v; else me.bar[k - BAR0] = v; };
+const invCount = (id) => allBoxes().reduce((n, s) => n + (s && s.id === id ? s.n : 0), 0);
+const invRoom = (id) => me.inv.reduce((n, s) => n + (!s ? stackMax(id) : s.id === id ? stackMax(id) - s.n : 0), 0)
+  + me.bar.reduce((n, s) => n + (s && s.id === id ? stackMax(id) - s.n : 0), 0);
+// Adds up to n of an item (topping up stacks anywhere first, then empty grid boxes). Returns how many fit.
 function addItem(id, n) {
-  let left = n;
-  for (const s of me.inv) if (left && s && s.id === id && s.n < STACK_MAX) { const k = Math.min(left, STACK_MAX - s.n); s.n += k; left -= k; }
-  for (let i = 0; i < me.inv.length && left; i++) if (!me.inv[i]) { const k = Math.min(left, STACK_MAX); me.inv[i] = { id, n: k }; left -= k; }
-  checkGather();
+  let left = n; const max = stackMax(id);
+  for (const s of allBoxes()) if (left && s && s.id === id && s.n < max) { const k = Math.min(left, max - s.n); s.n += k; left -= k; }
+  for (let i = 0; i < me.inv.length && left; i++) if (!me.inv[i]) { const k = Math.min(left, max); me.inv[i] = { id, n: k }; left -= k; }
+  checkGather(); refreshHotbar(false);
   if (ui.stack[ui.stack.length - 1] === 'inv') renderInventory();
   saveGame();
   return n - left;
 }
 function checkGather() { if (!me.gatherDone && me.gatherObj && invCount('wood') >= GATHER.wood && invCount('stone') >= GATHER.stone) me.gatherDone = true; }
-// Takes n of an item out of the inventory (from the last boxes first)
+// Takes n of an item out (grid from the last box first, then the hotbar)
 function removeItem(id, n) {
-  for (let i = me.inv.length - 1; i >= 0 && n > 0; i--) {
-    const s = me.inv[i]; if (!s || s.id !== id) continue;
-    const k = Math.min(n, s.n); s.n -= k; n -= k; if (s.n <= 0) me.inv[i] = null;
+  for (let k = BAR0 - 1; k >= 0 && n > 0; k--) n = takeFrom(k, id, n);
+  for (let k = BAR0; k < BAR0 + SLOT_COUNT && n > 0; k++) n = takeFrom(k, id, n);
+}
+function takeFrom(k, id, n) {
+  const s = getBox(k); if (!s || s.id !== id) return n;
+  const m = Math.min(n, s.n); s.n -= m; if (s.n <= 0) setBox(k, null); return n - m;
+}
+// The axe and bolt cutters are in your boxes exactly while you own them (world.axeOwner / cuttersOwner).
+// A new one goes to its usual hotbar box (axe 1, cutters 2) if free, else the first free hotbar box, else the grid.
+function syncTools() {
+  for (const [id, own, pref] of [['axe', hasAxe(), 0], ['cutters', hasCutters(), 1]]) {
+    let k = -1; for (let i = 0; i < BAR0 + SLOT_COUNT; i++) if (getBox(i) && getBox(i).id === id) { if (k < 0 && own) k = i; else setBox(i, null); }
+    if (own && k < 0) {
+      let to = !me.bar[pref] ? BAR0 + pref : BAR0 + me.bar.findIndex((s) => !s);
+      if (to < BAR0) to = me.inv.findIndex((s) => !s);
+      if (to >= 0) setBox(to, { id, n: 1 });
+    }
   }
 }
+// What's in your hand: the item in the selected hotbar box
+const held = () => (me.equipped >= 0 && me.bar[me.equipped] ? me.bar[me.equipped].id : null);
+const holdingAxe = () => held() === 'axe' && hasAxe();
+const toolKey = (id) => { const i = me.bar.findIndex((s) => s && s.id === id); return i < 0 ? 'Tab' : String(i + 1); };
 
 // =====================================================================
-// Crafting (Crafting page in the inventory). Only inside a shelter; takes a few seconds.
+// Crafting (Crafting page in the inventory). Start it inside a shelter; it then keeps going anywhere.
+// Each Craft click queues one item; its materials are taken right away and given back if you cancel (✕).
 // =====================================================================
 const RECIPES = [
   { id: 'campfire', name: 'Campfire', cost: { wood: 10, stone: 5 }, time: 5, unlocked: () => me.gatherDone },
 ];
-let craft = null;   // { r: recipe, t: seconds so far } while crafting
+const CRAFT_QUEUE_MAX = 5;
+let craftBeat = 0, craftBoxT = 0;
+const recipeOf = (id) => RECIPES.find((x) => x.id === id);
 const inShelter = () => houseAt(me.pos.x, me.pos.z) >= 0;
 const canAfford = (r) => Object.entries(r.cost).every(([id, n]) => invCount(id) >= n);
 function startCraft(id) {
-  const r = RECIPES.find((x) => x.id === id);
-  if (!r || craft || !r.unlocked() || !inShelter() || !canAfford(r)) return;
-  craft = { r, t: 0, beat: 0 }; sfx.play('equip'); renderInventory();
+  const r = recipeOf(id);
+  if (!r || !r.unlocked() || !inShelter() || !canAfford(r) || me.craftQ.length >= CRAFT_QUEUE_MAX) return;
+  for (const [mid, n] of Object.entries(r.cost)) removeItem(mid, n);
+  me.craftQ.push({ id, t: 0 }); sfx.play('equip'); refreshHotbar(false); saveGame(); renderInventory();
 }
-// Runs every frame: fills the bar; stops (nothing used up) if you close the inventory or leave the shelter
+function cancelCraft(i) {
+  const q = me.craftQ[i]; if (!q) return;
+  me.craftQ.splice(i, 1);
+  let lost = 0; for (const [mid, n] of Object.entries(recipeOf(q.id).cost)) lost += n - addItem(mid, n);
+  toast(lost ? 'Crafting cancelled (inventory full, some materials lost)' : 'Crafting cancelled, materials returned', 2200);
+  saveGame(); renderInventory();
+}
+// Seconds until queue item i is done (it waits for the ones ahead of it)
+const craftLeft = (i) => me.craftQ.slice(0, i + 1).reduce((s, q) => s + Math.max(0, recipeOf(q.id).time - q.t), 0);
+const fmtTime = (s) => { s = Math.ceil(s); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+// Runs every frame while playing, whether or not the inventory is open
 function updateCraft(dt) {
-  if (!craft) return;
+  const q = me.craftQ[0];
+  if (q) {
+    const r = recipeOf(q.id);
+    if (q.t < r.time) { q.t = Math.min(r.time, q.t + dt); craftBeat += dt; if (craftBeat > 0.9) { craftBeat = 0; sfx.play('thunk'); } }
+    if (q.t >= r.time) {   // done: it goes into your inventory as soon as there's room
+      if (invRoom(r.id) > 0) {
+        me.craftQ.shift(); addItem(r.id, 1);
+        if (r.id === 'campfire') me.campfireDone = true;
+        sfx.play('pickup'); toast(`${r.name} crafted`, 1800); saveGame();
+        if (ui.stack[ui.stack.length - 1] === 'inv') renderInventory();
+      } else if (!q.full) { q.full = true; toast('Inventory full: make room to finish crafting', 2600); }
+    }
+  }
+  // Live bars and timers (cheap: only the numbers change)
   const open = ui.stack[ui.stack.length - 1] === 'inv';
-  if (mode !== 'game' || !open || !inShelter() || !canAfford(craft.r)) {
-    craft = null; if (open) renderInventory();
-    if (mode === 'game') toast(!open ? 'Crafting stopped (inventory closed)' : !inShelter() ? 'Crafting stopped (you left the shelter)' : 'Crafting stopped', 2000);
-    return;
-  }
-  craft.t += dt; craft.beat += dt;
-  if (craft.beat > 0.9) { craft.beat = 0; sfx.play('thunk'); }
-  const fill = $('craftFill'); if (fill) fill.style.width = Math.min(100, (craft.t / craft.r.time) * 100) + '%';
-  if (craft.t >= craft.r.time) {
-    const r = craft.r; craft = null;
-    for (const [id, n] of Object.entries(r.cost)) removeItem(id, n);
-    if (addItem(r.id, 1) < 1) { for (const [id, n] of Object.entries(r.cost)) addItem(id, n); toast('Inventory full', 1800); renderInventory(); return; }
-    if (r.id === 'campfire') me.campfireDone = true;
-    sfx.play('pickup'); toast(`${r.name} crafted`, 1800); saveGame(); renderInventory();
-  }
+  me.craftQ.forEach((c, i) => {
+    const f = open && document.getElementById('qFill' + i); if (f) f.style.width = (100 * c.t / recipeOf(c.id).time) + '%';
+    const tl = open && document.getElementById('qTime' + i); if (tl) tl.textContent = c.full ? 'Inventory full' : fmtTime(craftLeft(i));
+  });
+  craftBoxT -= dt; if (craftBoxT <= 0) { craftBoxT = 0.2; renderCraftBox(); }
+}
+// Small "Crafting" box at the bottom left of the screen: each item crafting and the time left
+function renderCraftBox() {
+  const box = $('craftBox'); box.classList.toggle('show', me.craftQ.length > 0 && mode === 'game');
+  if (!me.craftQ.length) return;
+  const html = me.craftQ.map((c, i) => { const d = INV_DEFS[c.id]; return `<div class="cbRow">${d.icon ? `<img src="${d.icon}" alt="">` : ''}<span class="cbName">${d.name}</span><span class="cbTime">${c.full ? 'full' : fmtTime(craftLeft(i))}</span></div>`; }).join('');
+  if ($('craftRows').innerHTML !== html) $('craftRows').innerHTML = html;
 }
 function craftingPage() {
   const list = RECIPES.filter((r) => r.unlocked());
   if (!list.length) return `<div class="label">Crafting</div><div class="invText muted">Nothing here yet.</div>`;
-  return `<div class="label">Crafting</div>` + list.map((r) => {
-    const d = INV_DEFS[r.id], afford = canAfford(r), shelter = inShelter(), busy = craft && craft.r === r;
+  const cards = list.map((r) => {
+    const d = INV_DEFS[r.id], afford = canAfford(r), shelter = inShelter(), full = me.craftQ.length >= CRAFT_QUEUE_MAX, ok = afford && shelter && !full;
     const costs = Object.entries(r.cost).map(([id, n]) => { const have = invCount(id); return `<span class="${have >= n ? 'ok' : 'short'}">${INV_DEFS[id].name} ${have}/${n}</span>`; }).join('');
-    const label = busy ? 'Crafting…' : !shelter ? 'Go inside a shelter to craft' : !afford ? 'Not enough materials' : `Craft (${r.time} s)`;
+    const label = !shelter ? 'Go inside a shelter to craft' : !afford ? 'Not enough materials' : full ? 'Queue is full' : `Craft (${r.time} s)`;
     return `<div class="recipe"><div class="slot">${d.icon ? `<img src="${d.icon}" alt="${d.name}">` : ''}</div>
       <div class="rinfo"><div class="rname">${r.name}</div><div class="rcost">${costs}</div>
-      <button class="btn small craftBtn${busy || (afford && shelter) ? ' primary' : ''}" data-craft="${r.id}"${!busy && (!afford || !shelter) ? ' disabled' : ''}>
-        <span class="craftFill" ${busy ? 'id="craftFill"' : ''} style="width:${busy ? Math.min(100, craft.t / r.time * 100) : 0}%"></span><span class="craftLbl">${label}</span></button></div></div>`;
+      <button class="btn small craftBtn${ok ? ' primary' : ''}" data-craft="${r.id}"${ok ? '' : ' disabled'}><span class="craftLbl">${label}</span></button></div></div>`;
   }).join('');
+  const queue = me.craftQ.length ? `<div class="label" style="margin-top:14px">Crafting now</div>` + me.craftQ.map((c, i) => {
+    const d = INV_DEFS[c.id], r = recipeOf(c.id);
+    return `<div class="qRow">${d.icon ? `<img src="${d.icon}" alt="">` : ''}<div class="qMid"><div class="qTop"><span>${d.name}</span><span id="qTime${i}">${c.full ? 'Inventory full' : fmtTime(craftLeft(i))}</span></div>
+      <div class="qBar"><div id="qFill${i}" style="width:${100 * c.t / r.time}%"></div></div></div>
+      <button class="icon-btn qX" data-cancel="${i}" title="Cancel and get the materials back" aria-label="Cancel crafting ${d.name}">✕</button></div>`;
+  }).join('') : '';
+  return `<div class="label">Crafting</div>` + cards + queue;
 }
 let invTab = 'inventory';
 function toggleInventory() {
@@ -2150,14 +2228,8 @@ function renderInventory() {
   for (const b of $('invTabs').children) b.classList.toggle('on', b.dataset.tab === invTab);
   // All four pages are stacked in the same spot and only the open one is visible,
   // so the window is always the size of the Inventory page whichever topic is open.
-  const pic = (icon, name) => (icon ? `<img src="${icon}" alt="${name}">` : `<span class="nm">${name}</span>`);
-  let grid = '';
-  for (const s of me.inv) grid += `<div class="slot">${s ? pic(INV_DEFS[s.id].icon, INV_DEFS[s.id].name) + `<span class="cnt">${s.n}</span>` : ''}</div>`;
-  let bar = '';
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    const it = ITEMS[i], has = !!(it && it.has() && it.icon);
-    bar += `<div class="slot${me.equipped === i ? ' on' : ''}" data-bar="${i}"><span class="n">${i + 1}</span>${has ? pic(it.icon, it.name) : ''}</div>`;
-  }
+  let grid = ''; for (let k = 0; k < BAR0; k++) grid += `<div class="slot" data-k="${k}">${boxHTML(getBox(k))}</div>`;
+  let bar = ''; for (let i = 0; i < SLOT_COUNT; i++) bar += `<div class="slot${me.equipped === i ? ' on' : ''}" data-k="${BAR0 + i}"><span class="n">${i + 1}</span>${boxHTML(me.bar[i])}</div>`;
   // Current objective, then every finished one under "Chapter 1"
   const done = CHAPTER1.filter(([, ok]) => ok()).map(([t]) => t);
   const cur = objective().replace(/\s+\[\w+\]$/, '');
@@ -2172,10 +2244,54 @@ function renderInventory() {
   $('invBody').innerHTML = Object.entries(pages).map(([k, html]) => `<div class="invPage${k === invTab ? ' on' : ''}" data-page="${k}">${html}</div>`).join('');
 }
 $('invTabs').addEventListener('click', (e) => { const t = e.target.closest('[data-tab]'); if (!t) return; t.blur(); invTab = t.dataset.tab; renderInventory(); });
+// Picture + count for one box (tools have no count)
+function boxHTML(s) {
+  if (!s) return '';
+  const d = INV_DEFS[s.id]; if (!d) return '';
+  return (d.icon ? `<img src="${d.icon}" alt="${d.name}" draggable="false">` : `<span class="nm">${d.name}</span>`) + (d.tool ? '' : `<span class="cnt">${s.n}</span>`);
+}
 $('invBody').addEventListener('click', (e) => {
   const c = e.target.closest('[data-craft]'); if (c) { c.blur(); startCraft(c.dataset.craft); return; }
-  const s = e.target.closest('[data-bar]'); if (!s) return; selectSlot(+s.dataset.bar); renderInventory();
+  const x = e.target.closest('[data-cancel]'); if (x) { x.blur(); cancelCraft(+x.dataset.cancel); }
 });
+// Drag and drop: press on an item, drag it, let go on any grid or hotbar box.
+// Empty box = move, different item = swap, same item = merge (up to 100). Anywhere else = it goes back.
+// A press without dragging on a hotbar box selects it, like pressing its number.
+const drag = { k: -1, x: 0, y: 0, moved: false, ghost: null };
+$('invBody').addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  const el = e.target.closest('[data-k]'); if (!el) return;
+  e.preventDefault(); drag.k = +el.dataset.k; drag.x = e.clientX; drag.y = e.clientY; drag.moved = false;
+});
+addEventListener('mousemove', (e) => {
+  if (drag.k < 0) return;
+  if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 5 && getBox(drag.k)) {
+    drag.moved = true;
+    const src = document.querySelector(`#invBody [data-k="${drag.k}"]`);
+    drag.ghost = document.createElement('div'); drag.ghost.className = 'slot dragGhost'; drag.ghost.innerHTML = boxHTML(getBox(drag.k));
+    document.body.appendChild(drag.ghost); if (src) src.classList.add('dragFrom');
+  }
+  if (drag.ghost) { drag.ghost.style.left = e.clientX + 'px'; drag.ghost.style.top = e.clientY + 'px'; }
+  for (const el of document.querySelectorAll('#invBody .dropOver')) el.classList.remove('dropOver');
+  if (drag.moved) { const over = document.elementFromPoint(e.clientX, e.clientY); const t = over && over.closest && over.closest('#invBody [data-k]'); if (t) t.classList.add('dropOver'); }
+});
+addEventListener('mouseup', (e) => {
+  if (drag.k < 0) return;
+  const from = drag.k; drag.k = -1;
+  if (drag.ghost) { drag.ghost.remove(); drag.ghost = null; }
+  if (!drag.moved) { if (from >= BAR0) { selectSlot(from - BAR0); renderInventory(); } return; }
+  const over = document.elementFromPoint(e.clientX, e.clientY), t = over && over.closest && over.closest('#invBody [data-k]');
+  if (t) moveBox(from, +t.dataset.k);
+  renderInventory();
+});
+function moveBox(a, b) {
+  if (a === b) return;
+  const A = getBox(a), B = getBox(b); if (!A) return;
+  if (B && B.id === A.id && B.n < stackMax(A.id)) {   // same item: merge
+    const k = Math.min(A.n, stackMax(A.id) - B.n); B.n += k; A.n -= k; if (A.n <= 0) setBox(a, null);
+  } else { setBox(b, A); setBox(a, B); }   // move or swap
+  me.swing = -1; sfx.play('equip'); refreshHotbar(false); saveGame();
+}
 
 let toastTimer;
 function toast(t, ms = 2400) { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), ms); }
@@ -2410,7 +2526,7 @@ const net = {
 };
 function myState() {
   const feet = me.stage === 'free' ? [me.pos.x, me.pos.y - eyeHeight(), me.pos.z] : [me.pos.x, 0, me.pos.z];
-  return [+feet[0].toFixed(3), +feet[1].toFixed(3), +feet[2].toFixed(3), +me.yaw.toFixed(3), me.stage === 'free' ? 'free' : 'strapped', me.equipped];
+  return [+feet[0].toFixed(3), +feet[1].toFixed(3), +feet[2].toFixed(3), +me.yaw.toFixed(3), me.stage === 'free' ? 'free' : 'strapped', held()];
 }
 const eyeHeight = () => lerp(EYE, CROUCH_EYE, me.crouch);
 
@@ -2425,14 +2541,17 @@ function startLocal({ fresh, saved }) {
   const mine = net.players.get(net.myId); me.slot = mine ? mine.slot : 0;
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
-  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.campfireDone = false; me.inv = emptyInv(); craft = null; outside.f = 0;
+  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.campfireDone = false; me.inv = emptyInv(); me.bar = emptyBar(); me.craftQ = []; outside.f = 0;
   $('banner').style.opacity = 0; lastObj = '';
   if (saved && saved.me && saved.me.stage === 'free') {
     const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone; me.campfireDone = !!s.campfireDone;
-    if (Array.isArray(s.inv)) me.inv = emptyInv().map((_, i) => (s.inv[i] && INV_DEFS[s.inv[i].id] && s.inv[i].n > 0 ? { id: s.inv[i].id, n: s.inv[i].n } : null));
+    const box = (b) => (b && INV_DEFS[b.id] && b.n > 0 ? { id: b.id, n: Math.min(b.n, stackMax(b.id)) } : null);
+    if (Array.isArray(s.inv)) me.inv = emptyInv().map((_, i) => box(s.inv[i]));
+    if (Array.isArray(s.bar)) me.bar = emptyBar().map((_, i) => box(s.bar[i]));   // older saves: the axe/cutters get put back in their usual boxes
+    if (Array.isArray(s.craftQ)) me.craftQ = s.craftQ.filter((q) => q && recipeOf(q.id)).slice(0, CRAFT_QUEUE_MAX).map((q) => ({ id: q.id, t: Math.max(0, +q.t || 0) }));
     me.pos.y = (insideBuilding(s.pos[0], s.pos[2]) ? 0 : terrainH(s.pos[0], s.pos[2])) + EYE;
     beds[me.slot].straps.forEach((st) => (st.visible = false));
-    if (ITEMS[s.equipped] && ITEMS[s.equipped].has()) me.equipped = s.equipped;
+    syncTools(); if (s.equipped >= 0 && s.equipped < SLOT_COUNT && me.bar[s.equipped]) me.equipped = s.equipped;
     refreshHotbar(false);
     toast('Welcome back');
   } else {
@@ -2473,7 +2592,7 @@ function saveGame() {
   const pose = me.stage === 'waking' ? standPose(me.slot) : null;
   save.game = {
     world: { ...world, boards: [...world.boards] },
-    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, campfireDone: me.campfireDone, inv: me.inv },
+    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, campfireDone: me.campfireDone, inv: me.inv, bar: me.bar, craftQ: me.craftQ.map((q) => ({ id: q.id, t: q.t })) },
   };
   persist();
 }
@@ -2503,7 +2622,7 @@ function objective() {
   }
   const left = world.boards.filter((b) => b > 0).length;
   if (left === 0) return 'Open the door  [F]';
-  if (hasAxe()) return me.equipped === 0 ? `Chop the boards off the door (${4 - left}/4)` : 'Equip the axe  [1]';
+  if (hasAxe()) return holdingAxe() ? `Chop the boards off the door (${4 - left}/4)` : `Equip the axe  [${toolKey('axe')}]`;
   if (world.glass) return `Chop the boards off the door (${4 - left}/4)`;
   return me.seenDoor ? 'Break open the emergency box' : 'Find a way out';
 }
@@ -2732,13 +2851,13 @@ function updateHover() {
       if (!me.seenDoor && !world.doorOpen) me.seenDoor = true;
       if (world.doorOpen) hover = null;
       else if (world.boards.every((b) => b === 0)) prompt = '<span class="key">F</span> Open the door';
-      else if (hasAxe()) { if (me.equipped !== 0) prompt = '<span class="key">1</span> Equip the axe'; else prompt = '<span class="key">Click</span> Chop the boards'; }
+      else if (hasAxe()) { if (!holdingAxe()) prompt = `<span class="key">${toolKey('axe')}</span> Equip the axe`; else prompt = '<span class="key">Click</span> Chop the boards'; }
       else if (world.axeOwner) { prompt = 'A friend has the axe'; info = true; }
       else { prompt = "It's boarded up. I need something to break the boards."; info = true; }
     }
   }
   // A tree in reach, when holding the axe: hold click to chop
-  hoverTree = me.stage === 'free' && !hover && me.equipped === 0 && hasAxe() ? aimedTree() : null;
+  hoverTree = me.stage === 'free' && !hover && holdingAxe() ? aimedTree() : null;
   if (hoverTree) prompt = '<span class="key">Hold Click</span> Chop the tree';
   const el = $('prompt'); if (el.innerHTML !== prompt) el.innerHTML = prompt; el.classList.toggle('info', info);
   $('crosshair').classList.toggle('hot', (!!hover || !!hoverTree) && !info);
@@ -2833,7 +2952,7 @@ async function boot() {
     // Blade edge points forward, about 30° left of straight ahead (measured, not eyeballed).
     // Larger rotation.y turns the edge back toward the camera; smaller turns it forward.
     v.position.set(0, -0.22, 0); v.rotation.set(-0.3, -Math.PI / 2 - 1.07, -0.2); viewAxe.add(v);
-    ITEMS[0].icon = makeIcon(models.axe);
+    INV_DEFS.axe.icon = makeIcon(models.axe);
   }
   applyQuality(); onResize();
   // Warm up shaders so the first frames don't stutter
