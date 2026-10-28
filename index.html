@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-26.5';
+window.GAME_VERSION = '2026-10-27.1';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -160,6 +160,17 @@ window.GAME_VERSION = '2026-10-26.5';
   .invPage.on { visibility: visible; }
   /* Only the Inventory page sets the size; longer pages (like Chapter 1) scroll inside it */
   .invPage:not([data-page="inventory"]) { height: 0; min-height: 100%; overflow-y: auto; }
+  /* Crafting recipe card: picture, name, cost (green = have enough, red = short), Craft button that fills while crafting */
+  .recipe { display: flex; gap: 14px; align-items: center; padding: 12px; border-radius: 5px; background: var(--panel-2); border: 2px solid var(--line); }
+  .recipe .slot { flex: none; cursor: default; }
+  .rinfo { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .rname { font-size: 26px; font-weight: 700; letter-spacing: .04em; }
+  .rcost { display: flex; gap: 14px; font-size: 19px; flex-wrap: wrap; }
+  .rcost .ok { color: var(--green); } .rcost .short { color: var(--red); }
+  .craftBtn { position: relative; overflow: hidden; width: 100%; }
+  .craftBtn:hover, .craftBtn:focus-visible { transform: none; }
+  .craftFill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(111, 194, 122, .55); pointer-events: none; }
+  .craftLbl { position: relative; }
   .slot .cnt { position: absolute; right: 5px; bottom: 2px; font-size: 17px; font-weight: 700; text-shadow: 0 1px 3px #000; }
   .slot .nm { font-size: 14px; color: var(--muted); text-align: center; line-height: 1.1; }
   #invBody .label { margin-bottom: 8px; }
@@ -1335,6 +1346,20 @@ function makeGatherIcons(rock, variants) {
   end.position.z = 0.276; log.add(end);
   log.rotation.y = 0.5;   // turn it a little so the cut end shows
   INV_DEFS.wood.icon = makeIcon(log, 0.35);
+  // Campfire: a ring of the same stones with bark logs leaning together in the middle, seen a little from above
+  const fire = new THREE.Group(), barkMat = cyl.material;
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2, s = outside.stones[i % Math.max(1, outside.stones.length)];
+    if (!s) break;
+    const m = new THREE.Mesh(s.mesh.geometry, s.mesh.material); m.scale.setScalar(s.mesh.scale.x * 0.9); m.position.set(Math.cos(a) * 0.2, 0.03, Math.sin(a) * 0.2); m.rotation.y = a; fire.add(m);
+  }
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + 0.4, l = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.028, 0.34, 8), barkMat);
+    const tilt = new THREE.Group(); tilt.rotation.y = a; l.position.set(0.075, 0.15, 0); l.rotation.z = 0.5; tilt.add(l); fire.add(tilt);
+  }
+  // The icon maker turns things a quarter turn about the vertical, so tilting about z here tips the top toward the viewer
+  fire.rotation.z = 0.6;
+  INV_DEFS.campfire.icon = makeIcon(fire, 0);
 }
 // Show the forest and stones the way the world says they are (chopped trees and taken stones gone)
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
@@ -1643,7 +1668,7 @@ const world = freshWorld();
 const me = {
   stage: 'menu', slot: 0, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0,
   baseYaw: 0, strap: 0, crouch: 0, bob: 0, onGround: true, vy: 0, equipped: -1, swing: -1, swingHit: false,
-  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, gatherObj: false, gatherDone: false, inv: [], wakeT: 0, shake: 0,
+  seenDoor: false, chapterDone: false, shelter: false, invOpened: false, gatherObj: false, gatherDone: false, campfireDone: false, inv: [], wakeT: 0, shake: 0,
 };
 const remotes = new Map();   // id -> avatar
 
@@ -2042,7 +2067,7 @@ const ui = {
 
 // Inventory (Tab). Locked until Find Shelter is done. Hotbar items show only in the hotbar row, never in the grid.
 const INV_ROWS = 5, INV_COLS = 5, STACK_MAX = 100;
-const INV_DEFS = { stone: { name: 'Stone', icon: '' }, wood: { name: 'Wood', icon: '' } };   // icons are drawn once the forest has loaded
+const INV_DEFS = { stone: { name: 'Stone', icon: '' }, wood: { name: 'Wood', icon: '' }, campfire: { name: 'Campfire', icon: '' } };   // icons are drawn once the forest has loaded
 const GATHER = { wood: 15, stone: 5 };   // "Gather Wood and Stone" is done at this much of each
 const emptyInv = () => Array(INV_ROWS * INV_COLS).fill(null);
 const invCount = (id) => me.inv.reduce((n, s) => n + (s && s.id === id ? s.n : 0), 0);
@@ -2058,6 +2083,61 @@ function addItem(id, n) {
   return n - left;
 }
 function checkGather() { if (!me.gatherDone && me.gatherObj && invCount('wood') >= GATHER.wood && invCount('stone') >= GATHER.stone) me.gatherDone = true; }
+// Takes n of an item out of the inventory (from the last boxes first)
+function removeItem(id, n) {
+  for (let i = me.inv.length - 1; i >= 0 && n > 0; i--) {
+    const s = me.inv[i]; if (!s || s.id !== id) continue;
+    const k = Math.min(n, s.n); s.n -= k; n -= k; if (s.n <= 0) me.inv[i] = null;
+  }
+}
+
+// =====================================================================
+// Crafting (Crafting page in the inventory). Only inside a shelter; takes a few seconds.
+// =====================================================================
+const RECIPES = [
+  { id: 'campfire', name: 'Campfire', cost: { wood: 10, stone: 5 }, time: 5, unlocked: () => me.gatherDone },
+];
+let craft = null;   // { r: recipe, t: seconds so far } while crafting
+const inShelter = () => houseAt(me.pos.x, me.pos.z) >= 0;
+const canAfford = (r) => Object.entries(r.cost).every(([id, n]) => invCount(id) >= n);
+function startCraft(id) {
+  const r = RECIPES.find((x) => x.id === id);
+  if (!r || craft || !r.unlocked() || !inShelter() || !canAfford(r)) return;
+  craft = { r, t: 0, beat: 0 }; sfx.play('equip'); renderInventory();
+}
+// Runs every frame: fills the bar; stops (nothing used up) if you close the inventory or leave the shelter
+function updateCraft(dt) {
+  if (!craft) return;
+  const open = ui.stack[ui.stack.length - 1] === 'inv';
+  if (mode !== 'game' || !open || !inShelter() || !canAfford(craft.r)) {
+    craft = null; if (open) renderInventory();
+    if (mode === 'game') toast(!open ? 'Crafting stopped (inventory closed)' : !inShelter() ? 'Crafting stopped (you left the shelter)' : 'Crafting stopped', 2000);
+    return;
+  }
+  craft.t += dt; craft.beat += dt;
+  if (craft.beat > 0.9) { craft.beat = 0; sfx.play('thunk'); }
+  const fill = $('craftFill'); if (fill) fill.style.width = Math.min(100, (craft.t / craft.r.time) * 100) + '%';
+  if (craft.t >= craft.r.time) {
+    const r = craft.r; craft = null;
+    for (const [id, n] of Object.entries(r.cost)) removeItem(id, n);
+    if (addItem(r.id, 1) < 1) { for (const [id, n] of Object.entries(r.cost)) addItem(id, n); toast('Inventory full', 1800); renderInventory(); return; }
+    if (r.id === 'campfire') me.campfireDone = true;
+    sfx.play('pickup'); toast(`${r.name} crafted`, 1800); saveGame(); renderInventory();
+  }
+}
+function craftingPage() {
+  const list = RECIPES.filter((r) => r.unlocked());
+  if (!list.length) return `<div class="label">Crafting</div><div class="invText muted">Nothing here yet.</div>`;
+  return `<div class="label">Crafting</div>` + list.map((r) => {
+    const d = INV_DEFS[r.id], afford = canAfford(r), shelter = inShelter(), busy = craft && craft.r === r;
+    const costs = Object.entries(r.cost).map(([id, n]) => { const have = invCount(id); return `<span class="${have >= n ? 'ok' : 'short'}">${INV_DEFS[id].name} ${have}/${n}</span>`; }).join('');
+    const label = busy ? 'Crafting…' : !shelter ? 'Go inside a shelter to craft' : !afford ? 'Not enough materials' : `Craft (${r.time} s)`;
+    return `<div class="recipe"><div class="slot">${d.icon ? `<img src="${d.icon}" alt="${d.name}">` : ''}</div>
+      <div class="rinfo"><div class="rname">${r.name}</div><div class="rcost">${costs}</div>
+      <button class="btn small craftBtn${busy || (afford && shelter) ? ' primary' : ''}" data-craft="${r.id}"${!busy && (!afford || !shelter) ? ' disabled' : ''}>
+        <span class="craftFill" ${busy ? 'id="craftFill"' : ''} style="width:${busy ? Math.min(100, craft.t / r.time * 100) : 0}%"></span><span class="craftLbl">${label}</span></button></div></div>`;
+  }).join('');
+}
 let invTab = 'inventory';
 function toggleInventory() {
   const top = ui.stack[ui.stack.length - 1];
@@ -2084,7 +2164,7 @@ function renderInventory() {
   const pages = {
     inventory: `<div class="label">Inventory</div><div class="grid">${grid}</div>
       <div id="invBar"><div class="label">Hotbar</div><div class="grid">${bar}</div></div>`,
-    crafting: `<div class="label">Crafting</div><div class="invText muted">Nothing here yet.</div>`,
+    crafting: craftingPage(),
     objectives: `<div class="label">Current</div><div class="invText" style="margin-bottom:14px">${cur}</div>`
       + `<div class="label">Chapter 1</div>` + (done.length ? `<ul class="invList">${done.map((t) => `<li class="done">✓ ${t}</li>`).join('')}</ul>` : `<div class="invText muted">Nothing finished yet.</div>`),
     notes: `<div class="label">Notes</div><div class="invText muted">Nothing here yet.</div>`,
@@ -2092,7 +2172,10 @@ function renderInventory() {
   $('invBody').innerHTML = Object.entries(pages).map(([k, html]) => `<div class="invPage${k === invTab ? ' on' : ''}" data-page="${k}">${html}</div>`).join('');
 }
 $('invTabs').addEventListener('click', (e) => { const t = e.target.closest('[data-tab]'); if (!t) return; t.blur(); invTab = t.dataset.tab; renderInventory(); });
-$('invBody').addEventListener('click', (e) => { const s = e.target.closest('[data-bar]'); if (!s) return; selectSlot(+s.dataset.bar); renderInventory(); });
+$('invBody').addEventListener('click', (e) => {
+  const c = e.target.closest('[data-craft]'); if (c) { c.blur(); startCraft(c.dataset.craft); return; }
+  const s = e.target.closest('[data-bar]'); if (!s) return; selectSlot(+s.dataset.bar); renderInventory();
+});
 
 let toastTimer;
 function toast(t, ms = 2400) { const el = $('toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), ms); }
@@ -2342,10 +2425,10 @@ function startLocal({ fresh, saved }) {
   const mine = net.players.get(net.myId); me.slot = mine ? mine.slot : 0;
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
-  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.inv = emptyInv(); outside.f = 0;
+  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.campfireDone = false; me.inv = emptyInv(); craft = null; outside.f = 0;
   $('banner').style.opacity = 0; lastObj = '';
   if (saved && saved.me && saved.me.stage === 'free') {
-    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone;
+    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone; me.campfireDone = !!s.campfireDone;
     if (Array.isArray(s.inv)) me.inv = emptyInv().map((_, i) => (s.inv[i] && INV_DEFS[s.inv[i].id] && s.inv[i].n > 0 ? { id: s.inv[i].id, n: s.inv[i].n } : null));
     me.pos.y = (insideBuilding(s.pos[0], s.pos[2]) ? 0 : terrainH(s.pos[0], s.pos[2])) + EYE;
     beds[me.slot].straps.forEach((st) => (st.visible = false));
@@ -2390,7 +2473,7 @@ function saveGame() {
   const pose = me.stage === 'waking' ? standPose(me.slot) : null;
   save.game = {
     world: { ...world, boards: [...world.boards] },
-    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, inv: me.inv },
+    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, campfireDone: me.campfireDone, inv: me.inv },
   };
   persist();
 }
@@ -2409,6 +2492,7 @@ function objective() {
     if (!me.shelter) return 'Find Shelter';
     if (!me.gatherObj) return 'Use Tab to open inventory';
     if (!me.gatherDone) return `Gather Wood and Stone (Wood ${Math.min(invCount('wood'), GATHER.wood)}/${GATHER.wood} · Stone ${Math.min(invCount('stone'), GATHER.stone)}/${GATHER.stone})`;
+    if (!me.campfireDone) return 'Go back to shelter and craft a campfire';
     return 'More coming soon';
   }
   if (world.chainCut) return 'Open the door  [F]';
@@ -2460,6 +2544,7 @@ const CHAPTER1 = [
   ['Find Shelter', () => me.shelter],
   ['Use Tab to open inventory', () => me.gatherObj],
   ['Gather Wood and Stone', () => me.gatherDone],
+  ['Go back to shelter and craft a campfire', () => me.campfireDone],
 ];
 
 // =====================================================================
@@ -2688,6 +2773,7 @@ function tick(dt) {
     updateCamera(dt, time);
     updateHover();
     updateTreeBar(dt, hoverTree);
+    updateCraft(dt);
     updateObjective();
     saveT += dt; if (saveT > 3) { saveT = 0; saveGame(); }
   } else if (mode === 'home') updateMenuCamera(time);
