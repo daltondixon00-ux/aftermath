@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-27.4';
+window.GAME_VERSION = '2026-10-27.5';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -467,6 +467,11 @@ const sfx = {
     const wf = ctx.createBiquadFilter(); wf.type = 'bandpass'; wf.frequency.value = 420; wf.Q.value = 0.6;
     const lfo = ctx.createOscillator(); lfo.frequency.value = 0.13; const lg = ctx.createGain(); lg.gain.value = 220; lfo.connect(lg).connect(wf.frequency); lfo.start();
     this.windGain = ctx.createGain(); this.windGain.gain.value = 0; wind.connect(wf).connect(this.windGain).connect(this.master); wind.start();
+    // Rain (only while it's raining; quieter indoors)
+    const rain = ctx.createBufferSource(); rain.buffer = buf; rain.loop = true;
+    const rh = ctx.createBiquadFilter(); rh.type = 'highpass'; rh.frequency.value = 900;
+    const rl = ctx.createBiquadFilter(); rl.type = 'lowpass'; rl.frequency.value = 7000;
+    this.rainGain = ctx.createGain(); this.rainGain.gain.value = 0; rain.connect(rh).connect(rl).connect(this.rainGain).connect(this.master); rain.start();
     // Fluorescent hum
     this.humGain = ctx.createGain(); this.humGain.gain.value = 0.012; this.humGain.connect(this.master);
     for (const f of [120, 240, 360]) { const o = ctx.createOscillator(); o.frequency.value = f; const g = ctx.createGain(); g.gain.value = 1 / (f / 120); o.connect(g).connect(this.humGain); o.start(); }
@@ -514,6 +519,7 @@ const sfx = {
         setTimeout(() => { if (!this.ctx) return; this.tone(60, .45, .9, 'sine', 30); const m = this.src(.35, 'lowpass', 280, 1); this.env(m.g, m.t, .002, .9, .3); }, 260); break; }
       case 'equip': { const n = this.src(.15, 'bandpass', 1800, 3); this.env(n.g, n.t, .002, .25, .12); break; }
       case 'crackle': { const n = this.src(.06, 'highpass', rand(1400, 4200), 1); this.env(n.g, n.t, .001, .22 * vol, rand(.02, .06)); break; }   // one pop of a burning fire
+      case 'thunder': { const n = this.src(4, 'lowpass', 160, .7); this.env(n.g, n.t, .4, .9, 3.4); this.tone(48, 3, .25, 'sine', 30); break; }
       case 'ignite': { const n = this.src(1.1, 'bandpass', 300, .7); n.f.frequency.exponentialRampToValueAtTime(1400, n.t + .6); this.env(n.g, n.t, .15, .45, .8);
         this.tone(70, .8, .12, 'sine', 110); break; }
     }
@@ -1586,14 +1592,17 @@ function updateOutdoors(dt, time) {
   outside.f += (target - outside.f) * (1 - Math.exp(-dt * 1.4));
   const f = outside.f, lowQ = settings.quality === 'low';
   const lit = lowQ ? f * f : lerp(0.35, 1, f);
-  outside.dir.intensity = 2.4 * lit; outside.hemi.intensity = 0.9 * f;
+  rainFx.f += ((world.rain && mode === 'game' ? 1 : 0) - rainFx.f) * (1 - Math.exp(-dt * 0.5));   // fades in over a few seconds
+  const wet = rainFx.f;
+  outside.dir.intensity = 2.4 * lit * (1 - 0.65 * wet); outside.hemi.intensity = 0.9 * f * (1 - 0.3 * wet);
   const c = mode === 'game' ? camera.position : me.pos;
   outside.dir.target.position.set(c.x, 0, c.z); outside.dir.position.copy(outside.dir.target.position).addScaledVector(SUN_DIR, 90);
-  scene.fog.color.copy(FOG_IN).lerp(FOG_OUT, f); scene.fog.density = lerp(0.02, 0.016, f);
+  scene.fog.color.copy(FOG_IN).lerp(FOG_OUT, f).lerp(FOG_RAIN, wet * f); scene.fog.density = lerp(0.02, 0.016, f) + 0.014 * wet * f;
   scene.environmentIntensity = lerp(0.04, 0.45, f);
   renderer.toneMappingExposure = lerp(1.35, 1.0, f);
   camera.far = f > 0.05 || world.exitOpen ? 320 : 70; camera.updateProjectionMatrix();
-  if (sfx.windGain) { sfx.windGain.gain.value = 0.2 * f; sfx.roomGain.gain.value = 0.22 * (1 - 0.8 * f); }
+  if (sfx.windGain) { sfx.windGain.gain.value = 0.2 * f; sfx.roomGain.gain.value = 0.22 * (1 - 0.8 * f); sfx.rainGain.gain.value = 0.16 * wet * Math.max(0.05, f); }
+  updateRain(dt, c);
   if (outside.doorLight) { const fl = Math.random() < 0.015 ? 0.15 : 1; outside.doorLight.intensity = 5 * fl; outside.doorLamp.emissiveIntensity = 1.5 * fl; }
   // Trees: full detail near you, stand-ins far away
   const nearR = lowQ ? 55 : 80;
@@ -1605,6 +1614,53 @@ function updateOutdoors(dt, time) {
   // A crow now and then
   if (f > 0.8) { outside.crowT -= dt; if (outside.crowT <= 0) { sfx.play('crow'); outside.crowT = rand(18, 45); } }
   outside.warnT = Math.max(0, outside.warnT - dt);
+}
+// Rain: streaks that fall around you, never inside a house or the hospital.
+// Starts RAIN_DELAY seconds after "Search for supplies" first shows (the host's clock counts for everyone).
+const RAIN_DELAY = 30;   // short for testing; the user will make it longer later
+const FOG_RAIN = new THREE.Color(0x3c4249);
+const RAIN_N = 4000, RAIN_BOX = 44, RAIN_TOP = 22;
+const rainFx = { f: 0, mesh: null, drops: null };
+function makeRain() {
+  const pos = new Float32Array(RAIN_N * 6);
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.LineBasicMaterial({ color: 0xa8b2bf, transparent: true, opacity: 0.35, depthWrite: false });
+  rainFx.mesh = new THREE.LineSegments(geo, mat); rainFx.mesh.frustumCulled = false; rainFx.mesh.visible = false; scene.add(rainFx.mesh);
+  // per drop: x, y, z, ground height, covered (1 = under a roof)
+  rainFx.drops = new Float32Array(RAIN_N * 5);
+}
+function placeDrop(i, x, z, y) {
+  const d = rainFx.drops, k = i * 5;
+  d[k] = x; d[k + 2] = z; d[k + 1] = y;
+  d[k + 3] = terrainH(x, z); d[k + 4] = houseAt(x, z) >= 0 || insideBuilding(x, z) ? 1 : 0;
+}
+function updateRain(dt, c) {
+  const show = rainFx.f > 0.02 && mode === 'game' && (outside.f > 0.05 || world.exitOpen);
+  if (!rainFx.mesh) { if (!show) return; makeRain(); }
+  rainFx.mesh.visible = show; if (!show) { rainFx.seeded = false; return; }
+  const d = rainFx.drops, pos = rainFx.mesh.geometry.attributes.position.array, H = RAIN_BOX / 2;
+  if (!rainFx.seeded) { rainFx.seeded = true; for (let i = 0; i < RAIN_N; i++) placeDrop(i, c.x + rand(-H, H), c.z + rand(-H, H), c.y + rand(-4, RAIN_TOP)); }
+  rainFx.mesh.material.opacity = 0.35 * rainFx.f;
+  const fall = 14 * dt, wx = 0;   // m per frame down (no sideways drift, so a drop never slides under a roof)
+  for (let i = 0; i < RAIN_N; i++) {
+    const k = i * 5; let x = d[k] + wx, y = d[k + 1] - fall, z = d[k + 2];
+    // Keep the drops in a box around you: one that drifts out comes back in on the other side
+    if (x - c.x > H || x - c.x < -H || z - c.z > H || z - c.z < -H) {
+      x = x - c.x > H ? x - RAIN_BOX : x - c.x < -H ? x + RAIN_BOX : x; z = z - c.z > H ? z - RAIN_BOX : z - c.z < -H ? z + RAIN_BOX : z;
+      placeDrop(i, x, z, y);
+    } else { d[k] = x; d[k + 1] = y; }
+    if (y < d[k + 3]) { y = c.y + RAIN_TOP * Math.random(); placeDrop(i, x + rand(-2, 2), z + rand(-2, 2), y); x = d[k]; z = d[k + 2]; }
+    const j = i * 6, hide = d[k + 4] ? -999 : 0;
+    pos[j] = x; pos[j + 1] = y + hide; pos[j + 2] = z;
+    pos[j + 3] = x - 0.04; pos[j + 4] = y + 0.55 + hide; pos[j + 5] = z;
+  }
+  rainFx.mesh.geometry.attributes.position.needsUpdate = true;
+}
+// Host only: count down to the rain once anyone has reached "Search for supplies"
+function updateRainClock(dt) {
+  if (net.role === 'guest' || !world.rainClock || world.rain) return;
+  world.rainT = (world.rainT || 0) + dt;
+  if (world.rainT >= RAIN_DELAY) requestAction({ a: 'rain' });
 }
 function treeCollide(p) {
   const gx = Math.floor(p.x / 4), gz = Math.floor(p.z / 4);
@@ -1869,9 +1925,8 @@ function houseColliders() {
 }
 // Find Shelter: tick it off the first time you step inside a house (the objective box plays the chime).
 // Tab opens the inventory from now on.
-// PAUSED (user, 2026-10-27): Find Shelter and everything after it is switched off for now. After Search for supplies
-// the objective is "Explore". Set this to false to bring it all back (nothing was removed). Saves already past
-// Find Shelter keep going as before.
+// DROPPED (user, 2026-10-27): new games go Search for supplies → Explore → (rain starts) → Craft campfire → place → light.
+// The Find Shelter chain only runs for saves already past Find Shelter.
 const SHELTER_PAUSED = true;
 function shelterFound() {
   me.shelter = true; toast('Shelter found'); saveGame();
@@ -1881,7 +1936,7 @@ function shelterFound() {
 // Players
 // =====================================================================
 // trees: tree id -> hits taken (5 = chopped down); treeWood: tree id -> wood it gives (12–18); rocks: ids of loose stones picked up
-const freshWorld = () => ({ glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false], trees: {}, treeWood: {}, rocks: [], campfires: [], loot: null });
+const freshWorld = () => ({ glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false], trees: {}, treeWood: {}, rocks: [], campfires: [], loot: null, rainClock: false, rainT: 0, rain: false });
 const world = freshWorld();
 const me = {
   stage: 'menu', slot: 0, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0,
@@ -1993,6 +2048,8 @@ function doAction(by, act) {          // host only
   if (act.a === 'loot' && world.loot && world.loot[act.i] && !world.loot[act.i].taken) {
     world.loot[act.i].taken = true; return { a: 'loot', i: act.i, by };
   }
+  if (act.a === 'rainClock' && !world.rainClock) { world.rainClock = true; world.rainT = 0; return { a: 'rainClock', by }; }
+  if (act.a === 'rain' && world.rainClock && !world.rain) { world.rain = true; return { a: 'rain', by }; }
   if (act.a === 'house' && act.i >= 0 && act.i < HOUSES.length) { world.houses = world.houses || []; world.houses[act.i] = !world.houses[act.i]; return { a: 'house', i: act.i, open: world.houses[act.i], by }; }
   return null;
 }
@@ -2040,6 +2097,7 @@ function playFx(fx) {
     const l = world.loot && world.loot[fx.i];
     if (l && fx.by === net.myId) { sfx.play('pickup'); giveItem(l.id, 1); if (!me.supplies) { me.supplies = true; saveGame(); } }
   }
+  if (fx.a === 'rain') sfx.play('thunder');
   if (fx.a === 'house' && houseDoors[fx.i]) { houseDoors[fx.i].target = fx.open ? 1 : 0; sfx.play(fx.open ? 'door' : 'thunk'); }
 }
 function applyWorldInstant() {   // used when loading a save or joining mid-game
@@ -2366,8 +2424,11 @@ const toolKey = (id) => { const i = me.bar.findIndex((s) => s && s.id === id); r
 // Each Craft click queues one item; its materials are taken right away and given back if you cancel (✕).
 // =====================================================================
 const RECIPES = [
-  { id: 'campfire', name: 'Campfire', cost: { wood: 10, stone: 5 }, time: 5, unlocked: () => me.gatherDone },
+  // New games: unlocked when the rain starts (Craft campfire objective). Older saves: after Gather Wood and Stone.
+  { id: 'campfire', name: 'Campfire', cost: { wood: 5, stone: 3 }, time: 5, unlocked: () => me.gatherDone || (world.rain && !me.shelter) },
 ];
+// "Craft campfire" is done once you've made one (or already have/placed one)
+const campfireMade = () => me.crafted || me.placedFire || invCount('campfire') > 0;
 const CRAFT_QUEUE_MAX = 5;
 let craftBoxT = 0;
 const recipeOf = (id) => RECIPES.find((x) => x.id === id);
@@ -2397,7 +2458,7 @@ function updateCraft(dt) {
     if (q.t < r.time) q.t = Math.min(r.time, q.t + dt);   // silent while crafting (user request)
     if (q.t >= r.time) {   // done: it goes into your inventory as soon as there's room
       if (invRoom(r.id) > 0) {
-        me.craftQ.shift(); addItem(r.id, 1);
+        me.craftQ.shift(); addItem(r.id, 1); if (r.id === 'campfire') me.crafted = true;
         sfx.play('pickup'); toast(`${r.name} crafted`, 1800); saveGame();
         if (ui.stack[ui.stack.length - 1] === 'inv') renderInventory();
       } else if (!q.full) { q.full = true; toast('Inventory full: make room to finish crafting', 2600); }
@@ -2424,7 +2485,7 @@ function craftingPage() {
   const cards = list.map((r) => {
     const d = INV_DEFS[r.id], afford = canAfford(r), shelter = inShelter(), full = me.craftQ.length >= CRAFT_QUEUE_MAX, ok = afford && shelter && !full;
     const costs = Object.entries(r.cost).map(([id, n]) => { const have = invCount(id); return `<span class="${have >= n ? 'ok' : 'short'}">${INV_DEFS[id].name} ${have}/${n}</span>`; }).join('');
-    const label = !shelter ? 'Go inside a shelter to craft' : !afford ? 'Not enough materials' : full ? 'Queue is full' : `Craft (${r.time} s)`;
+    const label = !shelter ? 'Go inside a house to craft' : !afford ? 'Not enough materials' : full ? 'Queue is full' : `Craft (${r.time} s)`;
     return `<div class="recipe"><div class="slot">${d.icon ? `<img src="${d.icon}" alt="${d.name}">` : ''}</div>
       <div class="rinfo"><div class="rname">${r.name}</div><div class="rcost">${costs}</div>
       <button class="btn small craftBtn${ok ? ' primary' : ''}" data-craft="${r.id}"${ok ? '' : ' disabled'}><span class="craftLbl">${label}</span></button></div></div>`;
@@ -2441,7 +2502,7 @@ let invTab = 'inventory';
 function toggleInventory() {
   const top = ui.stack[ui.stack.length - 1];
   if (top === 'inv') { ui.back(); return; }
-  if (ui.stack.length || me.stage !== 'free' || !(me.shelter || me.supplies)) return;   // unlocked by your first supply too
+  if (ui.stack.length || me.stage !== 'free' || !(me.shelter || me.supplies || world.rain)) return;   // unlocked by your first supply (or the rain, if you found none)
   ui.open('inv');
   if (!me.invOpened && me.shelter) { me.invOpened = true; saveGame(); }   // ticked off (✓ + chime) when the inventory closes
 }
@@ -2764,10 +2825,10 @@ function startLocal({ fresh, saved }) {
   const mine = net.players.get(net.myId); me.slot = mine ? mine.slot : 0;
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
-  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.supplies = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.placedFire = false; me.fireLit = false; me.inv = emptyInv(); me.bar = emptyBar(); me.craftQ = []; outside.f = 0;
+  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.supplies = false; me.crafted = false; me.askedRain = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.placedFire = false; me.fireLit = false; me.inv = emptyInv(); me.bar = emptyBar(); me.craftQ = []; outside.f = 0;
   $('banner').style.opacity = 0; lastObj = '';
   if (saved && saved.me && saved.me.stage === 'free') {
-    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.supplies = !!s.supplies; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone; me.placedFire = !!s.placedFire; me.fireLit = !!s.fireLit;
+    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.supplies = !!s.supplies; me.crafted = !!s.crafted; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone; me.placedFire = !!s.placedFire; me.fireLit = !!s.fireLit;
     const box = (b) => (b && INV_DEFS[b.id] && b.n > 0 ? { id: b.id, n: Math.min(b.n, stackMax(b.id)) } : null);
     if (Array.isArray(s.inv)) me.inv = emptyInv().map((_, i) => box(s.inv[i]));
     if (Array.isArray(s.bar)) me.bar = emptyBar().map((_, i) => box(s.bar[i]));   // older saves: the axe/cutters get put back in their usual boxes
@@ -2816,7 +2877,7 @@ function saveGame() {
   const pose = me.stage === 'waking' ? standPose(me.slot) : null;
   save.game = {
     world: { ...world, boards: [...world.boards] },
-    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, supplies: me.supplies, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, placedFire: me.placedFire, fireLit: me.fireLit, inv: me.inv, bar: me.bar, craftQ: me.craftQ.map((q) => ({ id: q.id, t: q.t })) },
+    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, supplies: me.supplies, crafted: me.crafted, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, placedFire: me.placedFire, fireLit: me.fireLit, inv: me.inv, bar: me.bar, craftQ: me.craftQ.map((q) => ({ id: q.id, t: q.t })) },
   };
   persist();
 }
@@ -2832,9 +2893,13 @@ function objective() {
   if (me.stage === 'waking') return 'Break free from the straps';
   if (world.exitOpen) {
     if (!me.chapterDone) return 'Go outside';
-    if (!me.supplies && !me.shelter) return 'Search for supplies';
-    if (SHELTER_PAUSED && !me.shelter) return 'Explore';
-    if (!me.shelter) return 'Find Shelter';
+    if (!me.shelter) {   // new games (Find Shelter dropped)
+      if (!world.rain) return me.supplies ? 'Explore' : 'Search for supplies';
+      if (!campfireMade()) { const r = recipeOf('campfire').cost; return `Craft campfire (Wood ${Math.min(invCount('wood'), r.wood)}/${r.wood} · Stone ${Math.min(invCount('stone'), r.stone)}/${r.stone})`; }
+      if (!me.placedFire) return 'Place the campfire inside a house';
+      if (!me.fireLit) return 'Start the campfire  [F]';
+      return 'More coming soon';
+    }
     if (!me.gatherObj) return 'Use Tab to open inventory';
     if (!me.gatherDone) return `Gather Wood and Stone (Wood ${Math.min(invCount('wood'), GATHER.wood)}/${GATHER.wood} · Stone ${Math.min(invCount('stone'), GATHER.stone)}/${GATHER.stone})`;
     if (!me.placedFire) return 'Craft and place a campfire in your shelter';
@@ -2888,10 +2953,14 @@ const CHAPTER1 = [
   ['Open the exit door', () => world.exitOpen],
   ['Go outside', () => me.chapterDone],
   ['Search for supplies', () => me.supplies],
+  ['Explore', () => !me.shelter && me.supplies && world.rain],
+  ['Craft campfire', () => !me.shelter && campfireMade()],
+  ['Place the campfire inside a house', () => !me.shelter && me.placedFire],
+  // older saves (past Find Shelter)
   ['Find Shelter', () => me.shelter],
   ['Use Tab to open inventory', () => me.gatherObj],
   ['Gather Wood and Stone', () => me.gatherDone],
-  ['Craft and place a campfire in your shelter', () => me.placedFire],
+  ['Craft and place a campfire in your shelter', () => me.shelter && me.placedFire],
   ['Start the campfire', () => me.fireLit],
 ];
 
@@ -3131,6 +3200,9 @@ function tick(dt) {
     updateHover();
     updateTreeBar(dt, hoverTree);
     updateCraft(dt);
+    // "Search for supplies" is up: start the hidden rain clock (once, for everyone)
+    if (me.chapterDone && !world.rainClock && !me.askedRain) { me.askedRain = true; requestAction({ a: 'rainClock' }); }
+    updateRainClock(dt);
     updateObjective();
     saveT += dt; if (saveT > 3) { saveT = 0; saveGame(); }
   } else if (mode === 'home') updateMenuCamera(time);
@@ -3209,7 +3281,7 @@ async function boot() {
 boot();
 
 // Test hooks (read-only helpers for automated checks)
-window.__game = { me, world, net, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
+window.__game = { me, world, net, rainFx, RECIPES, startCraft, giveItem, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
   step(sec) { for (let i = 0; i < sec * 60; i++) tick(1 / 60); },
   teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, HOUSES, houseDoors, houseAt, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes, aimedTree, invCount, INV_DEFS, CHAPTER1, mouse, fires, fireSpot, placeFire, get fireGhost() { return fireGhost; }, colliders, LOOT_SPOTS, lootMeshes, lootModels, interactables, objective, get hover() { return hover; } };
 </script>
