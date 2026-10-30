@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-29.3';
+window.GAME_VERSION = '2026-10-29.4';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -518,6 +518,7 @@ const sfx = {
       case 'bang': { this.tone(70, .5, 1, 'sine', 32); const n = this.src(.4, 'lowpass', 320, 1); this.env(n.g, n.t, .002, 1, .35);
         setTimeout(() => { if (!this.ctx) return; this.tone(60, .45, .9, 'sine', 30); const m = this.src(.35, 'lowpass', 280, 1); this.env(m.g, m.t, .002, .9, .3); }, 260); break; }
       case 'equip': { const n = this.src(.15, 'bandpass', 1800, 3); this.env(n.g, n.t, .002, .25, .12); break; }
+      case 'hiss': { const n = this.src(1.2, 'highpass', 2200, .6); this.env(n.g, n.t, .03, .4, 1.1); const m = this.src(.5, 'lowpass', 300, .7); this.env(m.g, m.t, .01, .3, .4); break; }   // a fire being put out
       case 'crackle': { const n = this.src(.06, 'highpass', rand(1400, 4200), 1); this.env(n.g, n.t, .001, .22 * vol, rand(.02, .06)); break; }   // one pop of a burning fire
       case 'thunder': { const n = this.src(4, 'lowpass', 160, .7); this.env(n.g, n.t, .4, .9, 3.4); this.tone(48, 3, .25, 'sine', 30); break; }
       case 'ignite': { const n = this.src(1.1, 'bandpass', 300, .7); n.f.frequency.exponentialRampToValueAtTime(1400, n.t + .6); this.env(n.g, n.t, .15, .45, .8);
@@ -1033,7 +1034,7 @@ async function loadHallwayProps() {
   if (shelves) { put(fit(shelves, 1.8), DESK_X - 0.3, 0, -31.2, -Math.PI / 2); addCol(DESK_X - 0.6, DESK_X, -31.9, -30.5); }
   if (box) { const b = fit(box, 0.5); put(b, DESK_X - 0.45, 0, -27.0, 0.3); put(b, DESK_X - 0.4, 0, -26.5, -0.2, (c) => c.scale.multiplyScalar(0.8)); addCol(DESK_X - 0.8, DESK_X, -27.4, -26.0); }
   if (models.wheelchair) { put(models.wheelchair, 0.8, 0, -20.2, -0.6); addCol(0.35, 1.25, -20.7, -19.7); }
-  renderer.compile(scene, camera);
+  warmUp();
 }
 
 function tryJammed(i) {
@@ -1330,8 +1331,8 @@ async function buildForest() {
   // Boulders: kept out of the house yards and driveways, and solid (they block you like tree trunks)
   const r = scatter(rock, 70, 1.4, { x0: -60, x1: 100, z0: -110, z1: 40 },
     (x, z) => houseLotDist(x, z) > 2 && (!clear(x, z) || (Math.abs(z - ROAD_Z) > 7 && !insideBuilding(x, z) && Math.hypot(x, z - BLD.z0) > 12)),
-    (x, z, w) => { const gk = Math.floor(x / 4) + ',' + Math.floor(z / 4); if (!outside.treeCols.has(gk)) outside.treeCols.set(gk, []); outside.treeCols.get(gk).push({ x, z, r: w * 0.42 }); outside.boulders.push({ x, z, r: w * 0.42, y: terrainH(x, z) + w * 0.25 }); }, 0.12);
-  if (r) r.castShadow = true;
+    (x, z, w) => { const gk = Math.floor(x / 4) + ',' + Math.floor(z / 4); if (!outside.treeCols.has(gk)) outside.treeCols.set(gk, []); outside.treeCols.get(gk).push({ x, z, r: w * 0.42 }); const col = { x, z, r: w * 0.42 }; outside.treeCols.get(gk).pop(); outside.treeCols.get(gk).push(col); outside.boulders.push({ i: outside.boulders.length, x, z, r: w * 0.42, y: terrainH(x, z) + w * 0.25, m: m4.clone(), col, kind: 'boulder' }); }, 0.12);
+  if (r) { r.castShadow = true; outside.boulderMesh = r; }
   outside.treePts = pts; outside.variants = variants;
   buildLooseStones(stone);
   makeGatherIcons(stone, variants);
@@ -1521,6 +1522,7 @@ function applyNature() {
   if (!outside.treePts) return;
   for (const p of outside.treePts) setTreeStanding(p, !((world.trees || {})[p.id] >= TREE_HITS));
   outside.stones.forEach((s, i) => { s.taken = (world.rocks || []).includes(i); });
+  for (const b of outside.boulders || []) setBoulderBroken(b, ((world.boulders || {})[b.i] || 0) >= BOULDER_HITS);
 }
 // Stones are detailed models, so only draw the ones near you (they'd be specks further away anyway)
 function updateStones() {
@@ -1579,12 +1581,14 @@ function aimedTree(reach = 2.6) {
 }
 // Health bar: shows on the tree you're chopping, and for a few seconds after a hit
 const treeBar = { p: null, t: 0 };
+// (boulders use the same bar)
+const hitsOn = (p) => (p.kind === 'boulder' ? (world.boulders || {})[p.i] : (world.trees || {})[p.id]) || 0;
 function updateTreeBar(dt, aimed) {
   treeBar.t = Math.max(0, treeBar.t - dt);
-  const p = aimed && (world.trees || {})[aimed.id] > 0 ? aimed : treeBar.t > 0 ? treeBar.p : null;
+  const p = aimed && hitsOn(aimed) > 0 ? aimed : treeBar.t > 0 ? treeBar.p : null;
   const show = !!p && !p.down && mode === 'game' && me.stage === 'free';
   $('treeBar').classList.toggle('show', show);
-  if (show) $('treeBarFill').style.width = (100 * (1 - ((world.trees || {})[p.id] || 0) / TREE_HITS)) + '%';
+  if (show) $('treeBarFill').style.width = (100 * (1 - hitsOn(p) / TREE_HITS)) + '%';
 }
 function giveItem(id, n) {
   if (n <= 0) return;
@@ -1908,6 +1912,7 @@ async function loadLoot() {
     INV_DEFS[id].icon = makeIcon(v, id === 'shoes' || id === 'tshirt' || id === 'pants' ? 0 : -0.6);
   }
   refreshHotbar(false); applyLoot();
+  warmUp();   // the pickaxe, knife and flashlight in your hand
 }
 // Puts the items for this game into the houses (and takes away ones already picked up)
 function applyLoot() {
@@ -2052,6 +2057,17 @@ function doAction(by, act) {          // host only
     const wood = Math.floor(total * h / TREE_HITS) - Math.floor(total * hits / TREE_HITS);   // a little each hit, all of it by the last
     return { a: 'chop', id: act.id, hits: h, wood, by, fell: h >= TREE_HITS };
   }
+  if (act.a === 'mine' && Number.isInteger(act.i) && act.i >= 0 && act.i < 200) {
+    world.boulders = world.boulders || {}; world.boulderStone = world.boulderStone || {};
+    const hits = world.boulders[act.i] || 0; if (hits >= BOULDER_HITS) return null;
+    const total = world.boulderStone[act.i] || (world.boulderStone[act.i] = 12 + Math.floor(Math.random() * 7));   // 12–18 stone, like a tree's wood
+    const h = hits + 1; world.boulders[act.i] = h;
+    const stone = Math.floor(total * h / BOULDER_HITS) - Math.floor(total * hits / BOULDER_HITS);
+    return { a: 'mine', i: act.i, hits: h, stone, by, broke: h >= BOULDER_HITS };
+  }
+  if (act.a === 'douse' && world.campfires && world.campfires[act.i] && world.campfires[act.i].lit) {
+    world.campfires[act.i].lit = false; return { a: 'douse', i: act.i, by };
+  }
   if (act.a === 'fire' && Number.isFinite(act.x) && Number.isFinite(act.z)) {
     world.campfires = world.campfires || [];
     world.campfires.push({ x: act.x, z: act.z, rot: +act.rot || 0, lit: false });
@@ -2080,7 +2096,7 @@ function requestAction(act) {
 }
 function playFx(fx) {
   if (fx.a === 'box') {
-    glassMesh.visible = false; emergencyGlow.visible = false; sfx.play('glass'); spawnShards();
+    glassMesh.visible = false; emergencyGlow.userData.off = true; emergencyGlow.intensity = 0; sfx.play('glass'); spawnShards();
     if (axeInBox) setTimeout(() => { axeInBox.visible = false; if (fx.by === net.myId) { sfx.play('pickup'); refreshHotbar('axe'); toast('Axe added to your hotbar'); } }, 450);
     else if (fx.by === net.myId) refreshHotbar('axe');
   }
@@ -2108,6 +2124,14 @@ function playFx(fx) {
     const c = world.campfires[fx.i];   // "Start the campfire" counts for whoever placed one in a shelter, whoever lights it
     if (c && me.placedFire && !me.fireLit && (fx.by === net.myId || houseAt(c.x, c.z) >= 0)) { me.fireLit = true; saveGame(); }
   }
+  if (fx.a === 'mine') {
+    const b = outside.boulders && outside.boulders[fx.i];
+    sfx.play('clank');
+    if (b) { spawnChips(new THREE.Vector3(b.x, b.y + 0.2, b.z).lerp(camera.position, 0.3), stoneChipMat); treeBar.p = b; treeBar.t = 3; }
+    if (fx.by === net.myId) { me.shake = Math.max(me.shake, 0.35); giveItem('stone', fx.stone); }
+    if (fx.broke && b) { sfx.play('boardFall'); spawnChips(new THREE.Vector3(b.x, b.y, b.z), stoneChipMat); setBoulderBroken(b, true); }
+  }
+  if (fx.a === 'douse') { applyFires(); sfx.play('hiss'); }
   if (fx.a === 'rock') {
     const s = outside.stones[fx.i]; if (s) { s.taken = true; s.mesh.visible = false; }
     if (fx.by === net.myId) { sfx.play('pickup'); giveItem('stone', 1); }
@@ -2121,7 +2145,7 @@ function playFx(fx) {
   if (fx.a === 'house' && houseDoors[fx.i]) { houseDoors[fx.i].target = doorDir(fx.open); sfx.play(fx.open ? 'door' : 'thunk'); }
 }
 function applyWorldInstant() {   // used when loading a save or joining mid-game
-  glassMesh.visible = !world.glass; emergencyGlow.visible = !world.glass; if (axeInBox) axeInBox.visible = !world.glass;
+  glassMesh.visible = !world.glass; emergencyGlow.userData.off = world.glass; emergencyGlow.intensity = world.glass ? 0 : 0.6; if (axeInBox) axeInBox.visible = !world.glass;
   boards.forEach((b, i) => {
     b.userData.fall = null;
     if (world.boards[i] > 0) { b.position.copy(b.userData.home); b.rotation.copy(b.userData.homeRot); }
@@ -2151,10 +2175,21 @@ function spawnShards() {
   }
 }
 const chipMat = new THREE.MeshStandardMaterial({ color: 0x8a6a48, roughness: 0.9 });
+const stoneChipMat = new THREE.MeshStandardMaterial({ color: 0x7c7a74, roughness: 0.95 });
+// Builds every shader the scene will need before you play, including things that only show up later
+// (the axe and tools in your hand, glass shards, chips), so nothing freezes the first time it appears.
+function warmUp() {
+  const temp = [shardMat, chipMat, stoneChipMat].map((m) => { const x = new THREE.Mesh(shardGeo, m); x.position.copy(camera.position); scene.add(x); return x; });
+  const hands = [viewAxe, viewCutters, typeof viewTool !== 'undefined' ? viewTool : null].filter(Boolean), was = hands.map((v) => v.visible);
+  hands.forEach((v) => { v.visible = true; v.children.forEach((c) => (c.userData.wasVis = c.visible, c.visible = true)); });
+  renderer.compile(scene, camera);
+  hands.forEach((v, i) => { v.visible = was[i]; v.children.forEach((c) => (c.visible = c.userData.wasVis)); });
+  temp.forEach((x) => scene.remove(x));
+}
 const chipGeo = new THREE.BoxGeometry(0.03, 0.012, 0.012);
-function spawnChips(at) {
+function spawnChips(at, mat = chipMat) {
   for (let i = 0; i < 14; i++) {
-    const m = new THREE.Mesh(chipGeo, chipMat); m.position.copy(at).add(new THREE.Vector3(rand(-0.3, 0.3), rand(-0.05, 0.05), 0.05)); scene.add(m);
+    const m = new THREE.Mesh(chipGeo, mat); m.position.copy(at).add(new THREE.Vector3(rand(-0.3, 0.3), rand(-0.05, 0.05), 0.05)); scene.add(m);
     shards.push({ m, v: new THREE.Vector3(rand(-1.5, 1.5), rand(0.5, 2.5), rand(0.8, 2.2)), w: new THREE.Vector3(rand(-15, 15), rand(-15, 15), rand(-15, 15)), rest: false, life: 6 });
   }
 }
@@ -2231,6 +2266,7 @@ function aimedBoulder(reach = 2.6) {
   if (!outside.boulders.length) return null;
   const o = camera.position; camera.getWorldDirection(aimDir); let best = null, bestT = reach;
   for (const b of outside.boulders) {
+    if (b.down) continue;
     if (Math.abs(b.x - o.x) > 6 || Math.abs(b.z - o.z) > 6) continue;
     const t = (b.x - o.x) * aimDir.x + (b.y - o.y) * aimDir.y + (b.z - o.z) * aimDir.z; if (t < 0 || t > bestT) continue;
     const dx = o.x + aimDir.x * t - b.x, dy = o.y + aimDir.y * t - b.y, dz = o.z + aimDir.z * t - b.z;
@@ -2238,10 +2274,13 @@ function aimedBoulder(reach = 2.6) {
   }
   return best;
 }
-function mineBoulder(b) {
-  spawnChips(new THREE.Vector3(b.x, b.y + 0.2, b.z).lerp(camera.position, 0.35));
-  sfx.play('clank'); me.shake = Math.max(me.shake, 0.35);
-  giveItem('stone', 1);
+const BOULDER_HITS = TREE_HITS;   // same as a tree
+function mineBoulder(b) { requestAction({ a: 'mine', i: b.i }); }
+// A broken boulder is gone: not drawn, and you can walk where it was
+function setBoulderBroken(b, down) {
+  if (!!b.down === down || !outside.boulderMesh) return;
+  b.down = down; outside.boulderMesh.setMatrixAt(b.i, down ? ZERO : b.m); outside.boulderMesh.instanceMatrix.needsUpdate = true;
+  b.col.r = down ? -10 : b.r;
 }
 
 // Cutting the chain: the view eases in to the chain, the jaws open around a link, a slow squeeze with a metal creak, then it snaps.
@@ -2449,7 +2488,7 @@ function pressInteract() {
     requestAction({ a: 'house', i, dir: inside ? -1 : 1 });
   }
   if (hover.startsWith('rock')) { if (invRoom('stone') > 0) requestAction({ a: 'rock', i: +hover.slice(4) }); else toast('Inventory full', 1800); }
-  if (hover.startsWith('fire')) requestAction({ a: 'light', i: +hover.slice(4) });
+  if (hover.startsWith('fire')) { const i = +hover.slice(4), c = (world.campfires || [])[i]; if (c) requestAction({ a: c.lit ? 'douse' : 'light', i }); }
   if (hover.startsWith('loot')) { const l = world.loot[+hover.slice(4)]; if (invRoom(l.id) > 0) requestAction({ a: 'loot', i: +hover.slice(4) }); else toast('Inventory full', 1800); }
 }
 function useItem() {
@@ -3297,7 +3336,7 @@ function updateHover() {
       prompt = '<span class="key">F</span> Try the door';
     } else if (hover && hover.startsWith('fire')) {
       const c = (world.campfires || [])[+hover.slice(4)];
-      if (!c || c.lit) hover = null; else prompt = '<span class="key">F</span> Start the campfire';
+      if (!c) hover = null; else prompt = '<span class="key">F</span> ' + (c.lit ? 'Put out the campfire' : 'Start the campfire');
     } else if (hover && hover.startsWith('loot')) {
       const l = (world.loot || [])[+hover.slice(4)];
       if (!l || l.taken) hover = null; else prompt = `<span class="key">F</span> Pick up ${INV_DEFS[l.id].name}`;
@@ -3355,7 +3394,7 @@ function tick(dt) {
     updateCamera(dt, time);
     updateCut(dt);
     updateHover();
-    updateTreeBar(dt, hoverTree);
+    updateTreeBar(dt, hoverTree || (me.stage === 'free' && held() === 'pickaxe' ? aimedBoulder() : null));
     updateCraft(dt);
     // "Search for supplies" is up: start the hidden rain clock (once, for everyone)
     if (me.chapterDone && !world.rainClock && !me.askedRain) { me.askedRain = true; requestAction({ a: 'rainClock' }); }
@@ -3371,7 +3410,7 @@ function tick(dt) {
     flickerPanel.emissiveIntensity = 2.2 * f; flickerRect.intensity = 30 * f; flickerLight.intensity = flickerLight.userData.base * f;
     if (sfx.humGain) sfx.humGain.gain.value = 0.012 * (0.4 + f * 0.6);
   }
-  if (emergencyGlow && emergencyGlow.visible) emergencyGlow.intensity = 0.45 + Math.sin(time * 2.2) * 0.25;
+  if (emergencyGlow && !emergencyGlow.userData.off) emergencyGlow.intensity = 0.45 + Math.sin(time * 2.2) * 0.25;
   if (hallway.exit) { const f = Math.random() < 0.03 ? 0.2 : 1; hallway.exit.mat.emissiveIntensity = 1.6 * f; hallway.exit.light.intensity = 2.2 * f; }
   if (hallway.flick) { const f = Math.sin(time * 23 + 1) > 0.9 || Math.random() < 0.02 ? 0.1 : 1; hallway.flick.intensity = hallway.flick.userData.base * f; hallway.flickPanel.emissiveIntensity = 2.2 * f; }
   updateJammed(dt);
@@ -3423,7 +3462,7 @@ async function boot() {
   }
   applyQuality(); onResize();
   // Warm up shaders so the first frames don't stutter
-  renderer.compile(scene, camera);
+  warmUp();
   mode = 'home'; ui.render();
   $('loading').classList.remove('show');
   // Opened from an invite link (?join=CODE): go straight into the friend's room
@@ -3438,7 +3477,7 @@ async function boot() {
 boot();
 
 // Test hooks (read-only helpers for automated checks)
-window.__game = { me, world, net, rainFx, cutAnim, startCut, toolViews, torchBeam, aimedBoulder, fireLights, houseColliders, RECIPES, startCraft, giveItem, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
+window.__game = { me, world, net, emergencyGlow, BOULDER_HITS, mineBoulder, get treeBarState() { return treeBar; }, rainFx, cutAnim, startCut, toolViews, torchBeam, aimedBoulder, fireLights, houseColliders, RECIPES, startCraft, giveItem, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
   step(sec) { for (let i = 0; i < sec * 60; i++) tick(1 / 60); },
   teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, HOUSES, houseDoors, houseAt, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes, aimedTree, invCount, INV_DEFS, CHAPTER1, mouse, fires, fireSpot, placeFire, get fireGhost() { return fireGhost; }, colliders, LOOT_SPOTS, lootMeshes, lootModels, interactables, objective, get hover() { return hover; } };
 </script>
