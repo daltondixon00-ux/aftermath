@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-29.1';
+window.GAME_VERSION = '2026-10-29.2';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -954,7 +954,7 @@ function buildHallway() {
     }
     const hit = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.2, 1.1), new THREE.MeshBasicMaterial()); hit.visible = false; hit.position.set(-s * 0.1, 1.1, 0); g.add(hit);
     interactables.push({ mesh: hit, id: 'jam' + i });
-    jammed.push({ slab, shake: 0, side: s });
+    jammed.push({ slab, shake: 0, side: s, hit });
   }
 
   // Signs
@@ -1045,8 +1045,26 @@ function tryJammed(i) {
   }
   subtitle(["It's jammed.", "Won't budge.", 'Locked tight.', 'Something is blocking it.'][Math.floor(Math.random() * 4)], 1800);
 }
+// The creature breaks out through the last locked door on the right (the one furthest from the patient room)
+const BURST_DOOR = 7;
+function burstDoor(instant) {
+  const d = jammed[BURST_DOOR]; if (!d || d.fall) return;
+  d.fall = instant ? 1 : 0.001;
+  const k = interactables.findIndex((it) => it.id === 'jam' + BURST_DOOR); if (k >= 0) interactables.splice(k, 1);
+  if (instant) placeFallen(d, 1);
+}
+function unburstDoor() {
+  const d = jammed[BURST_DOOR]; if (!d || !d.fall) return;
+  d.fall = 0; placeFallen(d, 0);
+  if (!interactables.some((it) => it.id === 'jam' + BURST_DOOR)) interactables.push({ mesh: d.hit, id: 'jam' + BURST_DOOR });
+}
+function placeFallen(d, f) {   // f: 0 standing → 1 flat on the hallway floor
+  const e = f * f; d.slab.rotation.z = d.side * e * Math.PI / 2; d.slab.position.x = -d.side * e * 0.06; d.slab.position.y = e * 0.03;
+}
 function updateJammed(dt) {
+  for (const d of jammed) if (d.fall > 0 && d.fall < 1) { d.fall = Math.min(1, d.fall + dt * 2.6); placeFallen(d, d.fall); if (d.fall >= 1) sfx.play('boardFall'); }
   for (const d of jammed) {
+    if (d.fall) continue;
     if (d.shake <= 0) continue;
     d.shake = Math.max(0, d.shake - dt * 3);
     d.slab.position.x = Math.sin(d.shake * 45) * 0.012 * d.shake * d.side;
@@ -2058,7 +2076,7 @@ const playerSpot = (id) => { if (id === net.myId) return [me.pos.x, me.pos.z]; c
 function updateCreature(dt) {
   const c = world.creature; if (!c || net.role === 'guest' || mode !== 'game') return;
   c.t = (c.t || 0) + dt; c.cool = Math.max(0, (c.cool || 0) - dt);
-  if (c.st === 'wake') { crHeard.length = 0; if (c.t > 2.6) { c.st = 'hunt'; c.path = crPath(c.x, c.z, c.tx, c.tz); c.t = 0; } return; }
+  if (c.st === 'wake') { crHeard.length = 0; if (c.t > 3.0) { c.st = 'hunt'; c.path = crPath(c.x, c.z, c.tx, c.tz); c.t = 0; } return; }
   // Listen: every player's noise, plus loud things that just happened
   const ears = [];
   for (const [id] of net.players) {
@@ -2094,10 +2112,10 @@ function updateCreature(dt) {
 }
 // Everyone: hear it (louder and left/right as it moves around you), and the world goes quiet near it
 const crAudio = { breath: null, pan: null, stepT: 0, clickT: 0, quiet: 0, heartT: 0, lastSt: '', sx: 0, sz: 0, seen: false };
-const crSfx = (g) => ({ ctx: sfx.ctx, master: g, noise: sfx.noise, env: sfx.env });   // play sfx sounds through the creature's own volume and left/right
-function crVoice(build) {   // a one-off sound placed where the creature is
+const crSfx = (g) => Object.assign(Object.create(sfx), { master: g });   // the game's sounds, played through the creature's own volume and left/right
+function crVoice(build, vol = 1) {   // a one-off sound placed where the creature is (vol: louder for big crashes)
   const ctx = sfx.ctx; if (!ctx) return; const g = ctx.createGain(), p = ctx.createStereoPanner(); g.connect(p).connect(sfx.master);
-  const k = crLoud(); g.gain.value = k.gain; p.pan.value = k.pan; build(crSfx(g));
+  const k = crLoud(); g.gain.value = Math.min(1, k.gain * vol); p.pan.value = k.pan; build(crSfx(g));
 }
 function crLoud() {
   if (!world.creature) return { gain: 0, pan: 0, d: 99 };
@@ -2129,8 +2147,12 @@ function updateCreatureAudio(dt) {
   if (!here) return;
   // A new state: a sound (and a thought) to go with it
   if (c.st !== crAudio.lastSt) {
-    if (c.st === 'wake') { crVoice((a) => sfx.tone.call(a, 62, 1.6, 0.9, 'sawtooth', 44)); later(() => subtitle('…What was that?', 2400), 900); }
-    if (c.st === 'hunt' && crAudio.lastSt === 'wake') later(() => subtitle("Something's coming. It's following the noise… I need to hide and stay quiet.", 4200), 600);
+    if (c.st === 'wake') {   // two heavy bangs on the door, then it bursts through
+      const d = jammed[BURST_DOOR];
+      later(() => { crVoice((a) => a.play('bang'), 3); d.shake = 2; subtitle('…What was that?', 2400); }, 400);
+      later(() => { crVoice((a) => a.play('bang'), 3.5); d.shake = 2.5; }, 1400);
+      later(() => { crVoice((a) => { a.play('bang'); a.play('clank'); a.tone(62, 1.6, 0.9, 'sawtooth', 44); }, 4); burstDoor(); me.shake = Math.max(me.shake, 0.35); }, 2400);
+    }
     crAudio.lastSt = c.st;
   }
   // Dragging footsteps while it moves, and clicks while it's hunting or searching
@@ -2160,7 +2182,7 @@ function gotCaught() {
   let el = $('blackout'); if (!el) { el = document.createElement('div'); el.id = 'blackout'; el.style.cssText = 'position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;z-index:40'; document.body.appendChild(el); }
   el.style.transition = 'opacity .25s'; el.style.opacity = 1;
   setTimeout(() => { const p = standPose(me.slot); me.pos.set(p.x, EYE, p.z); me.yaw = p.yaw; me.pitch = 0; me.vel.set(0, 0, 0); me.crouch = 0; saveGame(); }, 600);
-  setTimeout(() => { el.style.transition = 'opacity 1.6s'; el.style.opacity = 0; subtitle("…It found me. It can't see, it hears. I have to be quieter.", 4200); }, 2400);
+  setTimeout(() => { el.style.transition = 'opacity 1.6s'; el.style.opacity = 0; subtitle("…What was that thing? I can't let it find me again.", 4200); }, 2400);
 }
 function updateCaught(dt) { if (caught.t > 0) caught.t = Math.max(0, caught.t - dt); }
 
@@ -2265,7 +2287,7 @@ function crFxNoise(fx) {
   if (net.role === 'guest' || !FX_NOISE[fx.a]) return;
   const pos = playerSpot(fx.by); if (pos) crHear(pos[0], pos[1], FX_NOISE[fx.a]);
   // Opening the patient room door wakes it up, down in the waiting room
-  if (fx.a === 'door' && !world.creature) world.creature = { x: -4.6, z: -29.6, st: 'wake', t: 0, first: true, tx: 0, tz: -8.6 };
+  if (fx.a === 'door' && !world.creature) world.creature = { x: HW + 0.8, z: JAM_Z[3], st: 'wake', t: 0, first: true, tx: 0, tz: -8.6 };   // behind the last locked door on the right
 }
 function applyWorldInstant() {   // used when loading a save or joining mid-game
   glassMesh.visible = !world.glass; emergencyGlow.visible = !world.glass; if (axeInBox) axeInBox.visible = !world.glass;
@@ -2277,6 +2299,7 @@ function applyWorldInstant() {   // used when loading a save or joining mid-game
   doorPivot.rotation.y = world.doorOpen ? 1.62 : 0; doorState.t = world.doorOpen ? 1 : 0; doorState.opening = false;
   if (cuttersInWorld) cuttersInWorld.visible = !world.cuttersOwner;
   applyHouseDoors();
+  if (world.creature) burstDoor(true); else unburstDoor();   // it already broke out (loading a save or joining later); the Home Menu shows it shut
   applyNature(); applyFires(); applyLoot();
   exitDoor.opening = false; exitDoor.t = world.exitOpen ? 1 : 0; exitDoor.fall = world.chainCut ? 1 : 0;
   exitDoor.left.rotation.y = world.exitOpen ? 1.45 : 0; exitDoor.right.rotation.y = world.exitOpen ? -1.45 : 0;
