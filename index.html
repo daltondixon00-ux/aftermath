@@ -7,7 +7,7 @@
 <script>
 // Always play the newest version. Browsers may keep an old copy of the page for up to 10 minutes,
 // so ask GitHub for the current one and reload once if it's newer. Bump this on every publish.
-window.GAME_VERSION = '2026-10-29.1';
+window.GAME_VERSION = '2026-10-27.6';
 (function () {
   if (!/^https?:$/.test(location.protocol)) return;
   fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
@@ -1037,7 +1037,7 @@ async function loadHallwayProps() {
 }
 
 function tryJammed(i) {
-  const d = jammed[i]; d.shake = 1; sfx.play('rattle'); makeNoise(0.9);
+  const d = jammed[i]; d.shake = 1; sfx.play('rattle');
   if (i === 5 && !me.heardBang) {
     me.heardBang = true;
     setTimeout(() => { sfx.play('bang'); d.shake = 2; me.shake = Math.max(me.shake, 0.8); subtitle('…Something is in there.', 2800); saveGame(); }, 700);
@@ -1615,8 +1615,7 @@ function updateOutdoors(dt, time) {
   scene.environmentIntensity = lerp(0.04, 0.45, f);
   renderer.toneMappingExposure = lerp(1.35, 1.0, f);
   camera.far = f > 0.05 || world.exitOpen ? 320 : 70; camera.updateProjectionMatrix();
-  const hush = 1 - 0.95 * crAudio.quiet;   // near the creature the world goes quiet
-  if (sfx.windGain) { sfx.windGain.gain.value = 0.2 * f * hush; sfx.roomGain.gain.value = 0.22 * (1 - 0.8 * f) * hush; sfx.rainGain.gain.value = 0.16 * wet * Math.max(0.05, f); }
+  if (sfx.windGain) { sfx.windGain.gain.value = 0.2 * f; sfx.roomGain.gain.value = 0.22 * (1 - 0.8 * f); sfx.rainGain.gain.value = 0.16 * wet * Math.max(0.05, f); }
   updateRain(dt, c);
   if (outside.doorLight) { const fl = Math.random() < 0.015 ? 0.15 : 1; outside.doorLight.intensity = 5 * fl; outside.doorLamp.emissiveIntensity = 1.5 * fl; }
   // Trees: full detail near you, stand-ins far away
@@ -1627,7 +1626,7 @@ function updateOutdoors(dt, time) {
   }
   for (const t of outside.trees) if (t.update) t.update(time);
   // A crow now and then
-  if (f > 0.8 && crAudio.quiet < 0.3) { outside.crowT -= dt; if (outside.crowT <= 0) { sfx.play('crow'); outside.crowT = rand(18, 45); } }
+  if (f > 0.8) { outside.crowT -= dt; if (outside.crowT <= 0) { sfx.play('crow'); outside.crowT = rand(18, 45); } }
   outside.warnT = Math.max(0, outside.warnT - dt);
 }
 // Rain: streaks that fall around you, never inside a house or the hospital.
@@ -1956,7 +1955,7 @@ function shelterFound() {
 // Players
 // =====================================================================
 // trees: tree id -> hits taken (5 = chopped down); treeWood: tree id -> wood it gives (12–18); rocks: ids of loose stones picked up
-const freshWorld = () => ({ glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false], trees: {}, treeWood: {}, rocks: [], campfires: [], loot: null, creature: null, rainClock: false, rainT: 0, rain: false });
+const freshWorld = () => ({ glass: false, axeOwner: null, boards: [2, 2, 2, 2], doorOpen: false, cuttersOwner: null, chainCut: false, exitOpen: false, houses: [false, false, false, false, false, false], trees: {}, treeWood: {}, rocks: [], campfires: [], loot: null, rainClock: false, rainT: 0, rain: false });
 const world = freshWorld();
 const me = {
   stage: 'menu', slot: 0, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0,
@@ -2032,139 +2031,6 @@ function updateAvatars(dt) {
 }
 
 // =====================================================================
-// The creature in the hospital. You never see it: it's blind and hunts by sound, and you only hear it.
-// Opening the patient room door wakes it (the boards and the door were loud). It comes to the noise; hide and stay quiet.
-// The host moves it (world.creature) and everyone hears it. If it finds you, you black out and wake by your bed.
-// =====================================================================
-const CR_NODES = [[0, -3], [0, -9], [0, -13], [0, -18.5], [0, -24], [0, -29], [-4, -29], [3, -29], [0, -33]];   // where it can walk
-const CR_EDGES = [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [5, 7], [5, 8]];
-const CR_HEAR = 14;          // m: how far a noise of 1 (running footsteps) carries; walking 0.5, sneaking (crouched) 0.1
-const CR_SPEED = { hunt: 1.35, search: 0.5, wander: 0.75 };
-const crNear = (x, z) => { let b = 0, bd = 1e9; CR_NODES.forEach(([nx, nz], i) => { const d = Math.hypot(nx - x, nz - z); if (d < bd) { bd = d; b = i; } }); return b; };
-function crPath(fx, fz, tx, tz) {   // nodes from here to there (fewest hops), then the spot itself
-  const a = crNear(fx, fz), b = crNear(tx, tz), prev = { [a]: -1 }, q = [a];
-  while (q.length) { const n = q.shift(); if (n === b) break; for (const [u, v] of CR_EDGES) { const m = u === n ? v : v === n ? u : -1; if (m >= 0 && !(m in prev)) { prev[m] = n; q.push(m); } } }
-  const out = []; for (let n = b; n !== -1 && n !== undefined; n = prev[n]) out.unshift(CR_NODES[n]);
-  out.push([tx, tz]); return out;
-}
-const crWanderTo = (c) => { const n = CR_NODES[2 + Math.floor(Math.random() * 7)]; c.path = crPath(c.x, c.z, n[0], n[1]); };
-// Noise you make (footsteps, rattling doors, swings). It fades in a moment; the host hears everyone's.
-me.noise = 0;
-function makeNoise(level) { me.noise = Math.max(me.noise, level); }
-const crHeard = [];   // loud world events the host heard this frame: [x, z, level]
-function crHear(x, z, level) { if (net.role !== 'guest') crHeard.push([x, z, level]); }
-const playerSpot = (id) => { if (id === net.myId) return [me.pos.x, me.pos.z]; const s = net.states.get(id); return s ? [s[0], s[2]] : null; };
-// Host only
-function updateCreature(dt) {
-  const c = world.creature; if (!c || net.role === 'guest' || mode !== 'game') return;
-  c.t = (c.t || 0) + dt; c.cool = Math.max(0, (c.cool || 0) - dt);
-  if (c.st === 'wake') { crHeard.length = 0; if (c.t > 2.6) { c.st = 'hunt'; c.path = crPath(c.x, c.z, c.tx, c.tz); c.t = 0; } return; }
-  // Listen: every player's noise, plus loud things that just happened
-  const ears = [];
-  for (const [id] of net.players) {
-    const pos = playerSpot(id); if (!pos || !insideBuilding(pos[0], pos[1])) continue;
-    const n = id === net.myId ? me.noise : (net.states.get(id) || [])[6] || 0;
-    ears.push([pos[0], pos[1], n, id]);
-  }
-  if (!net.players.size) ears.push([me.pos.x, me.pos.z, me.noise, net.myId]);
-  for (const [x, z, n] of crHeard) ears.push([x, z, n, null]);
-  crHeard.length = 0;
-  let best = null;
-  for (const e of ears) { const d = Math.hypot(e[0] - c.x, e[1] - c.z); if (e[2] > 0 && d < e[2] * CR_HEAR && (!best || e[2] / (d + 1) > best[2] / (best[4] + 1))) best = [...e, d]; }
-  if (best && c.cool <= 0) { if (c.st !== 'hunt' || Math.hypot(best[0] - c.tx, best[1] - c.tz) > 0.8) { c.tx = best[0]; c.tz = best[1]; c.path = crPath(c.x, c.z, c.tx, c.tz); } c.st = 'hunt'; c.t = 0; }
-  // Walk the path
-  if (c.path && c.path.length) {
-    const [px, pz] = c.path[0], dx = px - c.x, dz = pz - c.z, d = Math.hypot(dx, dz), step = (CR_SPEED[c.st] || 0.7) * dt;
-    if (d <= step) { c.x = px; c.z = pz; c.path.shift(); } else { c.x += dx / d * step; c.z += dz / d * step; }
-  } else if (c.st === 'hunt') { c.st = 'search'; c.t = 0; }
-  else if (c.st === 'search') {
-    if (c.t > 6) {   // gave up: wander off (the first time, that means everyone hid)
-      if (c.first) requestAction({ a: 'calm' });
-      c.st = 'wander'; c.t = 0; crWanderTo(c);
-    } else if (Math.random() < dt * 0.8) c.path = [[c.tx + rand(-1.3, 1.3), c.tz + rand(-1.3, 1.3)]];   // sniffing around the spot
-  } else if (c.st === 'wander' && c.t > 6) { c.t = 0; crWanderTo(c); }
-  // Found someone: bumped into them, or heard them right next to it
-  if (c.cool <= 0) for (const e of ears) {
-    if (!e[3]) continue; const d = Math.hypot(e[0] - c.x, e[1] - c.z);
-    if (d < 0.55 || (d < 1.4 && e[2] > 0.08 && c.st !== 'wander')) {
-      c.cool = 6; if (c.first) requestAction({ a: 'calm' });
-      requestAction({ a: 'caught', id: e[3] }); c.st = 'wander'; c.t = 0; c.path = crPath(c.x, c.z, CR_NODES[8][0], CR_NODES[8][1]); break;
-    }
-  }
-}
-// Everyone: hear it (louder and left/right as it moves around you), and the world goes quiet near it
-const crAudio = { breath: null, pan: null, stepT: 0, clickT: 0, quiet: 0, heartT: 0, lastSt: '', sx: 0, sz: 0, seen: false };
-const crSfx = (g) => ({ ctx: sfx.ctx, master: g, noise: sfx.noise, env: sfx.env });   // play sfx sounds through the creature's own volume and left/right
-function crVoice(build) {   // a one-off sound placed where the creature is
-  const ctx = sfx.ctx; if (!ctx) return; const g = ctx.createGain(), p = ctx.createStereoPanner(); g.connect(p).connect(sfx.master);
-  const k = crLoud(); g.gain.value = k.gain; p.pan.value = k.pan; build(crSfx(g));
-}
-function crLoud() {
-  if (!world.creature) return { gain: 0, pan: 0, d: 99 };
-  const dx = crAudio.sx - camera.position.x, dz = crAudio.sz - camera.position.z, d = Math.hypot(dx, dz);
-  const right = Math.cos(me.yaw) * dx - Math.sin(me.yaw) * dz;   // + = to your right
-  return { gain: Math.pow(Math.max(0, 1 - d / 24), 1.7), pan: clamp(right / Math.max(d, 1), -0.85, 0.85), d };
-}
-function updateCreatureAudio(dt) {
-  const c = world.creature;
-  const here = !!c && mode === 'game' && insideBuilding(me.pos.x, me.pos.z) && me.stage !== 'strapped';
-  if (c) { if (!crAudio.seen) { crAudio.sx = c.x; crAudio.sz = c.z; crAudio.seen = true; } crAudio.sx += (c.x - crAudio.sx) * Math.min(1, dt * 8); crAudio.sz += (c.z - crAudio.sz) * Math.min(1, dt * 8); }
-  else crAudio.seen = false;
-  const k = here ? crLoud() : { gain: 0, pan: 0, d: 99 };
-  // The world goes quiet when you're within its hearing; your heart speeds up as it gets close
-  const wantQuiet = here && c.st !== 'wake' && k.d < CR_HEAR ? clamp((CR_HEAR - k.d) / 5, 0, 1) : 0;
-  crAudio.quiet += (wantQuiet - crAudio.quiet) * (1 - Math.exp(-dt / 0.7));
-  if (!sfx.ctx) return;
-  if (!crAudio.breath) {   // slow, wet breathing: filtered noise that swells in and out
-    const ctx = sfx.ctx, len = ctx.sampleRate * 3, buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
-    let last = 0; for (let i = 0; i < len; i++) { last = (last + 0.03 * (Math.random() * 2 - 1)) / 1.03; d[i] = last * 4; }
-    const src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
-    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 380; f.Q.value = 1.4;
-    const swell = ctx.createGain(); swell.gain.value = 0.5; const lfo = ctx.createOscillator(); lfo.frequency.value = 0.42; const lg = ctx.createGain(); lg.gain.value = 0.5; lfo.connect(lg).connect(swell.gain); lfo.start();
-    const g = ctx.createGain(); g.gain.value = 0; const p = ctx.createStereoPanner();
-    src.connect(f).connect(swell).connect(g).connect(p).connect(sfx.master); src.start();
-    crAudio.breath = g; crAudio.pan = p;
-  }
-  crAudio.breath.gain.value = here ? 0.5 * k.gain : 0; crAudio.pan.pan.value = k.pan;
-  if (!here) return;
-  // A new state: a sound (and a thought) to go with it
-  if (c.st !== crAudio.lastSt) {
-    if (c.st === 'wake') { crVoice((a) => sfx.tone.call(a, 62, 1.6, 0.9, 'sawtooth', 44)); later(() => subtitle('…What was that?', 2400), 900); }
-    if (c.st === 'hunt' && crAudio.lastSt === 'wake') later(() => subtitle("Something's coming. It's following the noise… I need to hide and stay quiet.", 4200), 600);
-    crAudio.lastSt = c.st;
-  }
-  // Dragging footsteps while it moves, and clicks while it's hunting or searching
-  const moving = c.st === 'hunt' || c.st === 'wander' || (c.st === 'search' && c.path && c.path.length);
-  crAudio.stepT -= dt;
-  if (moving && crAudio.stepT <= 0) {
-    crAudio.stepT = c.st === 'hunt' ? 0.62 : 0.95;
-    crVoice((a) => { const n = sfx.src.call(a, .32, 'lowpass', 260, .8); sfx.env(n.g, n.t, .02, .9, .28); });
-  }
-  crAudio.clickT -= dt;
-  if ((c.st === 'hunt' || c.st === 'search') && crAudio.clickT <= 0) {
-    crAudio.clickT = rand(1.1, 2.2);
-    for (let i = 0; i < 3; i++) setTimeout(() => crVoice((a) => { const n = sfx.src.call(a, .04, 'bandpass', rand(2600, 3800), 6); sfx.env(n.g, n.t, .001, 1.2, .03); }), i * 70);
-  }
-  // Heartbeat when it's close
-  crAudio.heartT -= dt;
-  if (crAudio.quiet > 0.35 && crAudio.heartT <= 0) { crAudio.heartT = lerp(1.25, 0.55, clamp((CR_HEAR - 5 - k.d) / 7, 0, 1)); sfx.play('heart'); }
-  // Lights flicker as it passes under them
-  for (const l of hallway.lights) { if (l === hallway.flick) continue; const near = Math.hypot(l.position.x - crAudio.sx, l.position.z - crAudio.sz) < 3; l.intensity = l.userData.base * (near && Math.random() < 0.35 ? 0.15 : 1); }
-}
-// It found you: black out, and wake up by your bed
-const caught = { t: 0 };
-function gotCaught() {
-  if (caught.t > 0) return;
-  caught.t = 3.2; me.shake = 1; sfx.play('bang'); cutAnim.on = false; mouse.down = false; me.swing = -1;
-  crVoice((a) => sfx.tone.call(a, 90, 0.9, 1, 'sawtooth', 50));
-  let el = $('blackout'); if (!el) { el = document.createElement('div'); el.id = 'blackout'; el.style.cssText = 'position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;z-index:40'; document.body.appendChild(el); }
-  el.style.transition = 'opacity .25s'; el.style.opacity = 1;
-  setTimeout(() => { const p = standPose(me.slot); me.pos.set(p.x, EYE, p.z); me.yaw = p.yaw; me.pitch = 0; me.vel.set(0, 0, 0); me.crouch = 0; saveGame(); }, 600);
-  setTimeout(() => { el.style.transition = 'opacity 1.6s'; el.style.opacity = 0; subtitle("…It found me. It can't see, it hears. I have to be quieter.", 4200); }, 2400);
-}
-function updateCaught(dt) { if (caught.t > 0) caught.t = Math.max(0, caught.t - dt); }
-
-// =====================================================================
 // Shared world actions (the host decides; everyone sees the same thing)
 // =====================================================================
 function doAction(by, act) {          // host only
@@ -2201,8 +2067,6 @@ function doAction(by, act) {          // host only
   if (act.a === 'loot' && world.loot && world.loot[act.i] && !world.loot[act.i].taken) {
     world.loot[act.i].taken = true; return { a: 'loot', i: act.i, by };
   }
-  if (act.a === 'calm' && world.creature && world.creature.first) { world.creature.first = false; return { a: 'calm', by }; }
-  if (act.a === 'caught' && world.creature) return { a: 'caught', id: act.id, by };
   if (act.a === 'rainClock' && !world.rainClock) { world.rainClock = true; world.rainT = 0; return { a: 'rainClock', by }; }
   if (act.a === 'rain' && world.rainClock && !world.rain) { world.rain = true; return { a: 'rain', by }; }
   // House doors: 0 shut, 1 swung in, -1 swung out (they swing away from whoever opens them)
@@ -2254,18 +2118,7 @@ function playFx(fx) {
     if (l && fx.by === net.myId) { sfx.play('pickup'); giveItem(l.id, 1); if (!me.supplies) { me.supplies = true; saveGame(); } }
   }
   if (fx.a === 'rain') sfx.play('thunder');
-  if (fx.a === 'calm' && !me.hid) { me.hid = true; saveGame(); }
-  if (fx.a === 'caught' && fx.id === net.myId) gotCaught();
-  crFxNoise(fx);
   if (fx.a === 'house' && houseDoors[fx.i]) { houseDoors[fx.i].target = doorDir(fx.open); sfx.play(fx.open ? 'door' : 'thunk'); }
-}
-// Loud things the creature hears (host only), from where the player who did it is standing
-const FX_NOISE = { box: 1.3, hit: 1.2, door: 1.5, cutters: 0.25, chain: 2.6, exitOpen: 2 };
-function crFxNoise(fx) {
-  if (net.role === 'guest' || !FX_NOISE[fx.a]) return;
-  const pos = playerSpot(fx.by); if (pos) crHear(pos[0], pos[1], FX_NOISE[fx.a]);
-  // Opening the patient room door wakes it up, down in the waiting room
-  if (fx.a === 'door' && !world.creature) world.creature = { x: -4.6, z: -29.6, st: 'wake', t: 0, first: true, tx: 0, tz: -8.6 };
 }
 function applyWorldInstant() {   // used when loading a save or joining mid-game
   glassMesh.visible = !world.glass; emergencyGlow.visible = !world.glass; if (axeInBox) axeInBox.visible = !world.glass;
@@ -2604,7 +2457,7 @@ function useItem() {
   const id = held();
   if (id === 'flashlight') { torchOn = !torchOn; sfx.play('equip'); updateToolView(); return; }
   if (!holdingAxe() && id !== 'pickaxe' && id !== 'knife') return;
-  me.swing = 0; me.swingHit = false; sfx.play('swoosh'); makeNoise(0.3);
+  me.swing = 0; me.swingHit = false; sfx.play('swoosh');
 }
 function swingHitCheck() {
   if (held() === 'pickaxe') { const b = aimedBoulder(); if (b) mineBoulder(b); else if (aimedTree()) sfx.play('thunk'); return; }
@@ -3040,10 +2893,7 @@ const net = {
   guestHandle(m) {
     if (m.t === 'lobby') { this.setPlayers(m.players); if (mode === 'game') this.syncAvatars(); if (ui.stack.includes('play')) syncPlayUI(); }
     if (m.t === 'start') { Object.assign(world, m.world); this.setPlayers(m.players); startLocal({ fresh: true }); }
-    if (m.t === 'states') {
-      for (const [id, s] of m.list) if (id !== this.myId) this.applyState(id, s);
-      if (m.cr) { world.creature = world.creature || {}; Object.assign(world.creature, { x: m.cr[0], z: m.cr[1], st: m.cr[2], first: m.cr[3] }); }
-    }
+    if (m.t === 'states') for (const [id, s] of m.list) if (id !== this.myId) this.applyState(id, s);
     if (m.t === 'fx') { Object.assign(world, m.world); playFx(m.fx); }
     if (m.t === 'gone') removeAvatar(m.id);
     if (m.t === 'kick' || m.t === 'end') this.lostHost(m.t === 'end' ? 'The host left the game' : 'The host closed the room');
@@ -3106,12 +2956,12 @@ const net = {
     this.sendT += dt; if (this.sendT < 1 / 15) return; this.sendT = 0;
     const st = myState();
     if (this.role === 'guest') this.send({ t: 'state', s: st });
-    else if (this.conns.size) { this.states.set('host', st); const c = world.creature; this.broadcast({ t: 'states', list: [...this.states.entries()], cr: c ? [+c.x.toFixed(2), +c.z.toFixed(2), c.st, !!c.first] : null }); }
+    else if (this.conns.size) { this.states.set('host', st); this.broadcast({ t: 'states', list: [...this.states.entries()] }); }
   },
 };
 function myState() {
   const feet = me.stage === 'free' ? [me.pos.x, me.pos.y - eyeHeight(), me.pos.z] : [me.pos.x, 0, me.pos.z];
-  return [+feet[0].toFixed(3), +feet[1].toFixed(3), +feet[2].toFixed(3), +me.yaw.toFixed(3), me.stage === 'free' ? 'free' : 'strapped', held(), +me.noise.toFixed(2)];
+  return [+feet[0].toFixed(3), +feet[1].toFixed(3), +feet[2].toFixed(3), +me.yaw.toFixed(3), me.stage === 'free' ? 'free' : 'strapped', held()];
 }
 const eyeHeight = () => lerp(EYE, CROUCH_EYE, me.crouch);
 
@@ -3126,10 +2976,10 @@ function startLocal({ fresh, saved }) {
   const mine = net.players.get(net.myId); me.slot = mine ? mine.slot : 0;
   beds.forEach((b, slot) => { const occupied = [...net.players.values()].some((p) => p.slot === slot); b.straps.forEach((s) => { s.visible = occupied; s.position.y = 0; s.rotation.set(0, 0, 0); }); });
   applyWorldInstant();
-  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.supplies = false; me.crafted = false; me.askedRain = false; me.hid = false; caught.t = 0; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.placedFire = false; me.fireLit = false; me.inv = emptyInv(); me.bar = emptyBar(); me.craftQ = []; outside.f = 0;
+  me.equipped = -1; me.swing = -1; me.strap = 0; me.crouch = 0; me.vy = 0; me.onGround = true; me.chapterDone = false; me.seenDoor = false; me.heardBang = false; me.seenExit = false; me.supplies = false; me.crafted = false; me.askedRain = false; me.shelter = false; me.invOpened = false; me.gatherObj = false; me.gatherDone = false; me.placedFire = false; me.fireLit = false; me.inv = emptyInv(); me.bar = emptyBar(); me.craftQ = []; outside.f = 0;
   $('banner').style.opacity = 0; lastObj = '';
   if (saved && saved.me && saved.me.stage === 'free') {
-    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.supplies = !!s.supplies; me.crafted = !!s.crafted; me.hid = !!s.hid || !!(world.doorOpen && !(world.creature && world.creature.first)); me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone; me.placedFire = !!s.placedFire; me.fireLit = !!s.fireLit;
+    const s = saved.me; me.stage = 'free'; me.pos.set(s.pos[0], EYE, s.pos[2]); me.yaw = s.yaw; me.pitch = s.pitch || 0; me.seenDoor = !!s.seenDoor; me.chapterDone = !!s.chapterDone; me.heardBang = !!s.heardBang; me.seenExit = !!s.seenExit; me.supplies = !!s.supplies; me.crafted = !!s.crafted; me.shelter = !!s.shelter; me.invOpened = !!s.invOpened; me.gatherObj = !!s.gatherObj; me.gatherDone = !!s.gatherDone; me.placedFire = !!s.placedFire; me.fireLit = !!s.fireLit;
     const box = (b) => (b && INV_DEFS[b.id] && b.n > 0 ? { id: b.id, n: Math.min(b.n, stackMax(b.id)) } : null);
     if (Array.isArray(s.inv)) me.inv = emptyInv().map((_, i) => box(s.inv[i]));
     if (Array.isArray(s.bar)) me.bar = emptyBar().map((_, i) => box(s.bar[i]));   // older saves: the axe/cutters get put back in their usual boxes
@@ -3178,7 +3028,7 @@ function saveGame() {
   const pose = me.stage === 'waking' ? standPose(me.slot) : null;
   save.game = {
     world: { ...world, boards: [...world.boards] },
-    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, supplies: me.supplies, crafted: me.crafted, hid: me.hid, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, placedFire: me.placedFire, fireLit: me.fireLit, inv: me.inv, bar: me.bar, craftQ: me.craftQ.map((q) => ({ id: q.id, t: q.t })) },
+    me: { stage: free ? 'free' : 'strapped', pos: pose ? [pose.x, EYE, pose.z] : [me.pos.x, me.pos.y, me.pos.z], yaw: pose ? pose.yaw : me.yaw, pitch: me.pitch, equipped: me.equipped, seenDoor: me.seenDoor, chapterDone: me.chapterDone, heardBang: me.heardBang, seenExit: me.seenExit, supplies: me.supplies, crafted: me.crafted, shelter: me.shelter, invOpened: me.invOpened, gatherObj: me.gatherObj, gatherDone: me.gatherDone, placedFire: me.placedFire, fireLit: me.fireLit, inv: me.inv, bar: me.bar, craftQ: me.craftQ.map((q) => ({ id: q.id, t: q.t })) },
   };
   persist();
 }
@@ -3209,7 +3059,6 @@ function objective() {
   }
   if (world.chainCut) return 'Open the door  [F]';
   if (world.doorOpen) {
-    if (world.creature && world.creature.first && !me.hid) return 'Hide';
     if (hasCutters()) return 'Cut the chain on the exit door  [F]';
     if (world.cuttersOwner) return 'Cut the chain on the exit door';
     return me.seenExit ? 'Find something to cut the chain' : 'Explore the hallway';
@@ -3250,7 +3099,6 @@ const CHAPTER1 = [
   ['Break open the emergency box', () => world.glass],
   ['Chop the boards off the door', () => world.boards.every((b) => b === 0)],
   ['Open the door', () => world.doorOpen],
-  ['Hide', () => me.hid],
   ['Find something to cut the chain', () => !!world.cuttersOwner],
   ['Cut the chain on the exit door', () => world.chainCut],
   ['Open the exit door', () => world.exitOpen],
@@ -3328,7 +3176,7 @@ function updatePlayer(dt, pad) {
     return;
   }
   // Free (no walking while cutting the chain)
-  const playing = !ui.stack.length && !cutAnim.on && caught.t <= 0;
+  const playing = !ui.stack.length && !cutAnim.on;
   let ix = 0, iz = 0;
   if (playing) {
     if (keys.KeyW || keys.ArrowUp) iz -= 1; if (keys.KeyS || keys.ArrowDown) iz += 1;
@@ -3352,13 +3200,13 @@ function updatePlayer(dt, pad) {
   // Jump / gravity
   const outdoorsNow = !insideBuilding(me.pos.x, me.pos.z), ground = outdoorsNow ? terrainH(me.pos.x, me.pos.z) : 0;
   let feet = me.pos.y - eyeHeight();
-  if (!me.onGround) { me.vy -= 9.8 * dt; feet += me.vy * dt; if (feet <= ground) { feet = ground; me.onGround = true; if (me.vy < -2) { sfx.play('step'); me.shake = Math.max(me.shake, 0.25); makeNoise(0.7); } me.vy = 0; } }
+  if (!me.onGround) { me.vy -= 9.8 * dt; feet += me.vy * dt; if (feet <= ground) { feet = ground; me.onGround = true; if (me.vy < -2) { sfx.play('step'); me.shake = Math.max(me.shake, 0.25); } me.vy = 0; } }
   else feet = ground;
   // Head bob and footsteps
   const speed = Math.hypot(me.vel.x, me.vel.z);
   if (me.onGround && speed > 0.3) {
     me.bob += dt * speed * 2.1;
-    stepAcc += dt * speed; if (stepAcc > (sprint ? 0.95 : 0.75)) { stepAcc = 0; sfx.play(outdoorsNow ? 'stepOut' : 'step'); makeNoise(me.crouch > 0.5 ? 0.1 : sprint ? 1 : 0.5); }
+    stepAcc += dt * speed; if (stepAcc > (sprint ? 0.95 : 0.75)) { stepAcc = 0; sfx.play(outdoorsNow ? 'stepOut' : 'step'); }
   } else me.bob = lerp(me.bob, Math.round(me.bob / Math.PI) * Math.PI, 1 - Math.exp(-dt * 6));
   me.pos.y = feet + eyeHeight();
   // Chapter complete
@@ -3506,8 +3354,6 @@ function tick(dt) {
     updatePlayer(dt, pad);
     updateCamera(dt, time);
     updateCut(dt);
-    me.noise = Math.max(0, me.noise - dt * 2.5);
-    updateCreature(dt); updateCreatureAudio(dt); updateCaught(dt);
     updateHover();
     updateTreeBar(dt, hoverTree);
     updateCraft(dt);
@@ -3523,7 +3369,7 @@ function tick(dt) {
   if (flickerPanel) {
     const f = Math.sin(time * 37) > 0.93 || (Math.sin(time * 0.7) > 0.96 && Math.random() < 0.5) ? 0.08 : 1;
     flickerPanel.emissiveIntensity = 2.2 * f; flickerRect.intensity = 30 * f; flickerLight.intensity = flickerLight.userData.base * f;
-    if (sfx.humGain) sfx.humGain.gain.value = 0.012 * (0.4 + f * 0.6) * (1 - 0.95 * crAudio.quiet);
+    if (sfx.humGain) sfx.humGain.gain.value = 0.012 * (0.4 + f * 0.6);
   }
   if (emergencyGlow && emergencyGlow.visible) emergencyGlow.intensity = 0.45 + Math.sin(time * 2.2) * 0.25;
   if (hallway.exit) { const f = Math.random() < 0.03 ? 0.2 : 1; hallway.exit.mat.emissiveIntensity = 1.6 * f; hallway.exit.light.intensity = 2.2 * f; }
@@ -3592,7 +3438,7 @@ async function boot() {
 boot();
 
 // Test hooks (read-only helpers for automated checks)
-window.__game = { me, world, net, crAudio, caught, makeNoise, CR_NODES, rainFx, cutAnim, startCut, toolViews, torchBeam, aimedBoulder, fireLights, houseColliders, RECIPES, startCraft, giveItem, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
+window.__game = { me, world, net, rainFx, cutAnim, startCut, toolViews, torchBeam, aimedBoulder, fireLights, houseColliders, RECIPES, startCraft, giveItem, get mode() { return mode; }, get stack() { return ui.stack; }, save: () => JSON.parse(localStorage.getItem(SAVE_KEY)), keys,
   step(sec) { for (let i = 0; i < sec * 60; i++) tick(1 / 60); },
   teleport(x, z, yaw) { me.pos.x = x; me.pos.z = z; if (yaw !== undefined) me.yaw = yaw; me.pitch = 0; }, breakFree, requestAction, tryJammed, HOUSES, houseDoors, houseAt, viewAxe, AXE_HOLD, outside, exitDoor, terrainH, selectSlot, useItem, pressInteract, camera, scene, beds, boards, makeAvatar, remotes, aimedTree, invCount, INV_DEFS, CHAPTER1, mouse, fires, fireSpot, placeFire, get fireGhost() { return fireGhost; }, colliders, LOOT_SPOTS, lootMeshes, lootModels, interactables, objective, get hover() { return hover; } };
 </script>
